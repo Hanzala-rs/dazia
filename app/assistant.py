@@ -26,6 +26,7 @@ TOOLS: dict[str, tuple[type[BaseModel], Callable]] = {
     "create_reminder": (reminders.CreateReminderArgs, reminders.create_reminder),
     "list_reminders": (reminders.ListRemindersArgs, reminders.list_reminders),
     "complete_reminder": (reminders.CompleteReminderArgs, reminders.complete_reminder),
+    "snooze_reminder": (reminders.SnoozeReminderArgs, reminders.snooze_reminder),
 }
 DATETIME_TOOL = "get_current_datetime"  # answered in Python, never by the model
 NO_TOOL = "none"
@@ -49,6 +50,7 @@ Tools:
 - create_reminder: args {{"title": str, "when": str}}. Put the user's time phrase in "when" EXACTLY as written (e.g. "tomorrow at 9 AM"). Never compute or convert dates yourself.
 - list_reminders: args {{"range": "today"|"tomorrow"|"upcoming"|"all"}}.
 - complete_reminder: args {{"reminder_id": int}} (the reminder's number).
+- snooze_reminder: args {{"reminder_id": int, "when": str}}. Move a reminder to a new time; put the time phrase in "when" EXACTLY as written (e.g. "in 10 minutes").
 - get_current_datetime: args {{}}. For questions about the current date or time.
 - none: args {{}}. Chat or questions; put your answer in "reply".
 For tools other than none, keep "reply" short; the system reports the real result."""
@@ -126,7 +128,7 @@ class Assistant:
             return self._current_datetime()
         if tool not in TOOLS:
             log.warning("Rejected unknown tool from LLM: %r", tool)
-            return AssistantReply(reply="Sorry, I can't do that. I can create, list, and complete reminders.")
+            return AssistantReply(reply="Sorry, I can't do that. I can create, list, complete, and snooze reminders.")
 
         args_model, _ = TOOLS[tool]
         try:
@@ -177,4 +179,6 @@ def _clarify(tool: str) -> str:
         return "What should I remind you about, and when? For example: 'remind me to call Ali tomorrow at 9 AM'."
     if tool == "complete_reminder":
         return "Which reminder should I mark as done? Please give its number."
+    if tool == "snooze_reminder":
+        return "Which reminder should I snooze, and until when? For example: 'snooze reminder 2 to 6 PM'."
     return "Which reminders would you like to see: today, tomorrow, upcoming, or all?"
