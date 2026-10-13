@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>DAZIA</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <header class="top">
+    <h1>DAZIA</h1>
+    <span id="model" class="model"></span>
+  </header>
+
+  <div id="banner" class="banner" role="alert" hidden></div>
+
+  <main class="layout">
+    <section class="chat" aria-label="Chat">
+      <ol id="log" class="log" aria-live="polite"></ol>
+      <p id="thinking" class="thinking" hidden>Thinking…</p>
+      <form id="form" class="composer" autocomplete="off">
+        <textarea id="input" rows="1" placeholder="Ask DAZIA… e.g. remind me to call Ali at 5pm"
+                  aria-label="Message"></textarea>
+        <button id="send" type="submit">Send</button>
+      </form>
+    </section>
+
+    <aside class="side" aria-label="Pending reminders">
+      <h2>Pending reminders</h2>
+      <p id="rem-empty" class="muted">No pending reminders.</p>
+      <ul id="reminders" class="reminders"></ul>
+    </aside>
+  </main>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>
