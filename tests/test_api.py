@@ -30,10 +30,22 @@ class FakeAssistant:
         return AssistantReply(reply=f"echo: {message}", tool="create_reminder", data={"id": 1})
 
 
+class FakeScheduler:
+    def __init__(self, *args, **kwargs):
+        pass
+
+    def start(self):
+        pass
+
+    def shutdown(self):
+        pass
+
+
 @pytest.fixture
 def client(monkeypatch):
     monkeypatch.setattr(main, "OllamaClient", FakeLLM)
     monkeypatch.setattr(main, "Assistant", FakeAssistant)
+    monkeypatch.setattr(main, "ReminderScheduler", FakeScheduler)
     with TestClient(main.app) as c:
         yield c
 
@@ -133,3 +145,71 @@ def test_index_serves_html(client):
 def test_static_assets_served(client):
     assert client.get("/static/app.js").status_code == 200
     assert client.get("/static/style.css").status_code == 200
+
+
+class FakeConn:
+    def __init__(self):
+        self.closed = False
+
+    def close(self):
+        self.closed = True
+
+
+@pytest.fixture
+def fake_conn(monkeypatch):
+    conn = FakeConn()
+    monkeypatch.setattr(main.db, "connect", lambda path: conn)
+    return conn
+
+
+def test_notifications_list(client, monkeypatch, fake_conn):
+    calls = {}
+    created = datetime(2026, 10, 15, 4, 0, tzinfo=timezone.utc)
+
+    def fake_list(conn, unread_only=True, limit=50):
+        calls.update(unread_only=unread_only, limit=limit)
+        return [
+            db.Notification(2, 7, "Missed reminder", "Call Ali — due Thu 15 Oct, 9:00 AM",
+                            db.KIND_MISSED, created, None),
+            db.Notification(1, None, "Reminder", "Tea", db.KIND_REMINDER, created, created),
+        ]
+
+    monkeypatch.setattr(main.db, "list_notifications", fake_list)
+    res = client.get("/notifications?unread_only=false&limit=5")
+    assert res.status_code == 200
+    assert res.json() == [
+        {"id": 2, "reminder_id": 7, "title": "Missed reminder", "body": "Call Ali — due Thu 15 Oct, 9:00 AM",
+         "kind": "missed", "created_at": "2026-10-15T04:00:00+00:00", "read_at": None},
+        {"id": 1, "reminder_id": None, "title": "Reminder", "body": "Tea", "kind": "reminder",
+         "created_at": "2026-10-15T04:00:00+00:00", "read_at": "2026-10-15T04:00:00+00:00"},
+    ]
+    assert calls == {"unread_only": False, "limit": 5}
+    assert fake_conn.closed
+
+
+def test_notifications_defaults(client, monkeypatch, fake_conn):
+    calls = {}
+    monkeypatch.setattr(main.db, "list_notifications",
+                        lambda conn, unread_only=True, limit=50: calls.update(u=unread_only, l=limit) or [])
+    assert client.get("/notifications").json() == []
+    assert calls == {"u": True, "l": 20}
+
+
+@pytest.mark.parametrize("limit", [0, 101, -1, "abc"])
+def test_notifications_bad_limit_rejected(client, limit):
+    assert client.get(f"/notifications?limit={limit}").status_code == 422
+
+
+@pytest.mark.parametrize("found", [True, False])
+def test_notification_mark_read(client, monkeypatch, fake_conn, found):
+    seen = []
+    monkeypatch.setattr(main.db, "mark_notification_read", lambda conn, nid: seen.append(nid) or found)
+    res = client.post("/notifications/3/read")
+    assert res.status_code == 200
+    assert res.json() == {"ok": found}
+    assert seen == [3]
+    assert fake_conn.closed
+
+
+def test_notification_mark_read_bad_id(client):
+    assert client.post("/notifications/abc/read").status_code == 422

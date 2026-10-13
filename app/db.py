@@ -22,7 +22,19 @@ CREATE TABLE IF NOT EXISTS reminders (
     notified_at TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_reminders_status_due ON reminders (status, due_utc);
+CREATE TABLE IF NOT EXISTS notifications (
+    id INTEGER PRIMARY KEY,
+    reminder_id INTEGER NULL,
+    title TEXT NOT NULL,
+    body TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    read_at TEXT
+);
 """
+
+# UPDATE ... RETURNING needs SQLite 3.35+; older builds use a locked SELECT + UPDATE instead.
+_HAS_RETURNING = sqlite3.sqlite_version_info >= (3, 35, 0)
 
 
 @dataclass
@@ -124,6 +136,121 @@ def mark_done(conn: sqlite3.Connection, reminder_id: int) -> bool:
     cur = conn.execute(
         "UPDATE reminders SET status = ? WHERE id = ? AND status = ?",
         (STATUS_DONE, reminder_id, STATUS_PENDING),
+    )
+    conn.commit()
+    return cur.rowcount == 1
+
+
+# ---- Phase 2: delivery and notifications -----------------------------------------
+# Delivery is idempotent: a reminder is "claimed" by setting notified_at in the same UPDATE
+# that selects it, so two checks can never deliver the same reminder twice.
+
+def claim_due(conn: sqlite3.Connection, now_utc: datetime) -> list[Reminder]:
+    """Atomically set notified_at=now for pending reminders with notified_at NULL and due_utc <= now;
+    return exactly the reminders this call claimed."""
+    now_text = _to_utc_text(now_utc)
+    if _HAS_RETURNING:
+        rows = conn.execute(
+            "UPDATE reminders SET notified_at = ? "
+            "WHERE status = ? AND notified_at IS NULL AND due_utc <= ? RETURNING *",
+            (now_text, STATUS_PENDING, now_text),
+        ).fetchall()
+        conn.commit()
+    else:
+        # BEGIN IMMEDIATE takes the write lock first, so no other connection can claim in between.
+        conn.commit()  # end any implicit transaction before starting our own
+        conn.execute("BEGIN IMMEDIATE")
+        try:
+            rows = conn.execute(
+                "SELECT * FROM reminders WHERE status = ? AND notified_at IS NULL AND due_utc <= ?",
+                (STATUS_PENDING, now_text),
+            ).fetchall()
+            conn.executemany(
+                "UPDATE reminders SET notified_at = ? WHERE id = ?", [(now_text, row["id"]) for row in rows]
+            )
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+        rows = [dict(row, notified_at=now_text) for row in rows]
+    reminders = [_row_to_reminder(row) for row in rows]
+    reminders.sort(key=lambda r: (r.due_utc, r.id))
+    return reminders
+
+
+def release_claim(conn: sqlite3.Connection, reminder_id: int) -> None:
+    """Undo a claim (notified_at=NULL) when delivery failed, so the next check retries it."""
+    conn.execute("UPDATE reminders SET notified_at = NULL WHERE id = ?", (reminder_id,))
+    conn.commit()
+
+
+def reschedule(conn: sqlite3.Connection, reminder_id: int, due_utc: datetime) -> bool:
+    """Snooze: set a new due time and clear notified_at. Only pending reminders. True if updated."""
+    cur = conn.execute(
+        "UPDATE reminders SET due_utc = ?, notified_at = NULL WHERE id = ? AND status = ?",
+        (_to_utc_text(due_utc), reminder_id, STATUS_PENDING),
+    )
+    conn.commit()
+    return cur.rowcount == 1
+
+
+KIND_REMINDER = "reminder"  # delivered on time
+KIND_MISSED = "missed"  # delivered late (laptop was off/asleep or server stopped)
+_KINDS = (KIND_REMINDER, KIND_MISSED)
+
+
+@dataclass
+class Notification:
+    id: int
+    reminder_id: int | None
+    title: str
+    body: str
+    kind: str  # KIND_REMINDER | KIND_MISSED
+    created_at: datetime  # aware, UTC
+    read_at: datetime | None
+
+
+def _row_to_notification(row: sqlite3.Row) -> Notification:
+    return Notification(
+        id=row["id"],
+        reminder_id=row["reminder_id"],
+        title=row["title"],
+        body=row["body"],
+        kind=row["kind"],
+        created_at=_from_utc_text(row["created_at"]),
+        read_at=_from_utc_text(row["read_at"]) if row["read_at"] else None,
+    )
+
+
+def add_notification(
+    conn: sqlite3.Connection, title: str, body: str, kind: str, reminder_id: int | None = None
+) -> Notification:
+    if kind not in _KINDS:
+        raise ValueError(f"unknown notification kind: {kind!r}")
+    created_text = _to_utc_text(datetime.now(timezone.utc))
+    cur = conn.execute(
+        "INSERT INTO notifications (reminder_id, title, body, kind, created_at) VALUES (?, ?, ?, ?, ?)",
+        (reminder_id, title, body, kind, created_text),
+    )
+    conn.commit()
+    row = conn.execute("SELECT * FROM notifications WHERE id = ?", (cur.lastrowid,)).fetchone()
+    return _row_to_notification(row)
+
+
+def list_notifications(conn: sqlite3.Connection, unread_only: bool = True, limit: int = 50) -> list[Notification]:
+    """Newest first."""
+    sql = "SELECT * FROM notifications"
+    if unread_only:
+        sql += " WHERE read_at IS NULL"
+    sql += " ORDER BY created_at DESC, id DESC LIMIT ?"
+    return [_row_to_notification(row) for row in conn.execute(sql, (limit,)).fetchall()]
+
+
+def mark_notification_read(conn: sqlite3.Connection, notification_id: int) -> bool:
+    """Return True if an unread notification was marked read."""
+    cur = conn.execute(
+        "UPDATE notifications SET read_at = ? WHERE id = ? AND read_at IS NULL",
+        (_to_utc_text(datetime.now(timezone.utc)), notification_id),
     )
     conn.commit()
     return cur.rowcount == 1

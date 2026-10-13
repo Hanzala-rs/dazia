@@ -9,9 +9,11 @@ from app.tools.reminders import (
     CompleteReminderArgs,
     CreateReminderArgs,
     ListRemindersArgs,
+    SnoozeReminderArgs,
     complete_reminder,
     create_reminder,
     list_reminders,
+    snooze_reminder,
 )
 
 TZ = "Asia/Karachi"
@@ -146,3 +148,55 @@ def test_complete_missing(conn):
     result = complete_reminder(conn, CompleteReminderArgs(reminder_id=42), NOW, TZ)
     assert not result.ok
     assert "#42" in result.message
+
+
+def snooze(conn, reminder_id, when):
+    return snooze_reminder(conn, SnoozeReminderArgs(reminder_id=reminder_id, when=when), NOW, TZ)
+
+
+def test_snooze_moves_due_time_and_clears_claim(conn):
+    r = add(conn, "stretch", datetime(2026, 10, 14, 14, 0))
+    assert [c.id for c in db.claim_due(conn, NOW)] == [r.id]
+
+    result = snooze(conn, r.id, "tomorrow at 9 AM")
+    assert result.ok and not result.needs_clarification
+    assert result.message == "Snoozed: stretch — Thu 15 Oct, 9:00 AM"
+    assert result.data["reminder"]["due_local"] == "2026-10-15T09:00:00+05:00"
+    stored = db.get_reminder(conn, r.id)
+    assert stored.due_utc == datetime(2026, 10, 15, 4, 0, tzinfo=timezone.utc)
+    assert stored.notified_at is None
+
+
+def test_snooze_relative(conn):
+    r = add(conn, "tea", datetime(2026, 10, 14, 14, 0))
+    result = snooze(conn, r.id, "in 10 minutes")
+    assert result.ok
+    assert db.get_reminder(conn, r.id).due_utc == datetime(2026, 10, 14, 10, 10, tzinfo=timezone.utc)
+
+
+@pytest.mark.parametrize("when", ["tomorrow at 9", "blah blah"])
+def test_snooze_needs_clarification_changes_nothing(conn, when):
+    r = add(conn, "stretch", datetime(2026, 10, 14, 14, 0))
+    result = snooze(conn, r.id, when)
+    assert not result.ok and result.needs_clarification and result.message
+    assert db.get_reminder(conn, r.id).due_utc == r.due_utc
+
+
+def test_snooze_missing_and_done(conn):
+    missing = snooze(conn, 42, "in 10 minutes")
+    assert not missing.ok and not missing.needs_clarification and "#42" in missing.message
+
+    r = add(conn, "pay bills", datetime(2026, 10, 16, 10, 0))
+    db.mark_done(conn, r.id)
+    done = snooze(conn, r.id, "in 10 minutes")
+    assert not done.ok and "already done" in done.message
+    assert db.get_reminder(conn, r.id).due_utc == r.due_utc
+
+
+def test_snooze_args_validation():
+    with pytest.raises(ValidationError):
+        SnoozeReminderArgs(reminder_id=0, when="in 10 minutes")
+    with pytest.raises(ValidationError):
+        SnoozeReminderArgs(reminder_id=1, when="")
+    with pytest.raises(ValidationError):
+        SnoozeReminderArgs(reminder_id=1, when="x" * 101)

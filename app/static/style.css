@@ -168,6 +168,40 @@ body {
 .rem-title { overflow-wrap: anywhere; }
 .rem-due { color: var(--muted); font-size: 0.85rem; }
 
+/* Notification feed at the top of the chat. */
+.notify-bar {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px 12px 0;
+}
+.notify-bar:has(.notifications:empty):has(.enable-alerts[hidden]) { padding: 0; }
+.notifications { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.notification {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: var(--bot-bg);
+  border-left: 4px solid var(--accent);
+}
+.notification.missed { background: var(--clarify-bg); border-left-color: var(--clarify-border); }
+.notification .n-text { flex: 1; overflow-wrap: anywhere; }
+.notification .n-title { font-weight: 600; font-size: 0.85rem; }
+.notification button, .enable-alerts {
+  font: inherit;
+  font-size: 0.85rem;
+  min-height: 32px;
+  padding: 2px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--panel);
+  color: var(--text);
+  cursor: pointer;
+}
+.enable-alerts { align-self: flex-start; }
+
 /* Wider screens: chat and reminders side by side. */
 @media (min-width: 800px) {
   .layout { flex-direction: row; align-items: stretch; }

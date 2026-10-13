@@ -10,6 +10,8 @@ const banner = document.getElementById("banner");
 const modelLabel = document.getElementById("model");
 const remList = document.getElementById("reminders");
 const remEmpty = document.getElementById("rem-empty");
+const notifList = document.getElementById("notifications");
+const alertsBtn = document.getElementById("enable-alerts");
 
 const UNREACHABLE = "Can't reach DAZIA on the laptop. Is the server running and are you on the same network?";
 
@@ -134,6 +136,7 @@ async function send(message) {
       addMessage("bot", data.reply, data.tool ? "tool: " + data.tool : "");
     }
     loadReminders();
+    loadNotifications();
   } finally {
     setBusy(false);
   }
@@ -155,5 +158,90 @@ input.addEventListener("keydown", (e) => {
   }
 });
 
+// ---- Notifications feed -------------------------------------------------------
+// The server writes a notification when a reminder fires. We poll for unread ones,
+// show them above the chat, and mark them read when dismissed.
+
+const POLL_MS = 15000;
+const seenIds = new Set();      // ids already shown at least once (no repeat browser alerts)
+const dismissedIds = new Set(); // dismissed here; hide even if a slow poll still returns them
+let firstLoad = true;
+
+const browserAlertsSupported = "Notification" in window;
+
+function updateAlertsButton() {
+  alertsBtn.hidden = !browserAlertsSupported || Notification.permission !== "default";
+}
+
+// Permission may only be requested from a user click.
+alertsBtn.addEventListener("click", async () => {
+  try {
+    await Notification.requestPermission();
+  } catch (_) { /* old browsers or blocked: just hide the button */ }
+  updateAlertsButton();
+});
+
+function showBrowserAlert(n) {
+  if (!browserAlertsSupported || Notification.permission !== "granted") return;
+  try {
+    new Notification(n.title, { body: n.body, tag: "dazia-" + n.id });
+  } catch (_) { /* e.g. mobile browsers that need a service worker: skip */ }
+}
+
+async function dismissNotification(id, li) {
+  dismissedIds.add(id);
+  li.remove();
+  try {
+    await fetch("/notifications/" + encodeURIComponent(id) + "/read", { method: "POST" });
+  } catch (_) { /* offline: it shows again after reload, which is fine */ }
+}
+
+function renderNotification(n) {
+  const li = document.createElement("li");
+  li.className = "notification " + (n.kind === "missed" ? "missed" : "due");
+  const text = document.createElement("div");
+  text.className = "n-text";
+  const title = document.createElement("div");
+  title.className = "n-title";
+  title.textContent = n.title;
+  const body = document.createElement("div");
+  body.textContent = n.body;
+  text.append(title, body);
+  const btn = document.createElement("button");
+  btn.type = "button";
+  btn.textContent = "Dismiss";
+  btn.setAttribute("aria-label", "Dismiss notification");
+  btn.addEventListener("click", () => dismissNotification(n.id, li));
+  li.append(text, btn);
+  return li;
+}
+
+async function loadNotifications() {
+  let items;
+  try {
+    const res = await fetch("/notifications?unread_only=true&limit=20");
+    if (!res.ok) return;
+    items = await res.json();
+  } catch (_) {
+    return; // unreachable: the banner/chat already explains it
+  }
+  let hasNew = false;
+  notifList.replaceChildren();
+  for (const n of items) {
+    if (dismissedIds.has(n.id)) continue;
+    if (!seenIds.has(n.id)) {
+      seenIds.add(n.id);
+      hasNew = true;
+      if (!firstLoad) showBrowserAlert(n); // don't alert old items on page load
+    }
+    notifList.appendChild(renderNotification(n));
+  }
+  firstLoad = false;
+  if (hasNew) loadReminders(); // a fired reminder may have changed the pending list
+}
+
+updateAlertsButton();
 checkHealth();
 loadReminders();
+loadNotifications();
+setInterval(loadNotifications, POLL_MS);

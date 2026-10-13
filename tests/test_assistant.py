@@ -7,7 +7,7 @@ from app import assistant as assistant_mod
 from app.assistant import Assistant
 from app.llm import LLMUnavailable
 from app.tools import ToolResult
-from app.tools.reminders import CompleteReminderArgs, CreateReminderArgs, ListRemindersArgs
+from app.tools.reminders import CompleteReminderArgs, CreateReminderArgs, ListRemindersArgs, SnoozeReminderArgs
 
 TZ = "Asia/Karachi"
 NOW = datetime(2026, 10, 14, 15, 5, tzinfo=ZoneInfo(TZ))  # a Wednesday
@@ -91,7 +91,8 @@ def test_system_prompt_has_date_weekday_tz_and_schema_enum(env):
     assert "2026-10-14 15:05" in system and "Wednesday" in system and TZ in system
     assert messages[-1] == {"role": "user", "content": "hello"}
     assert schema["properties"]["tool"]["enum"] == [
-        "create_reminder", "list_reminders", "complete_reminder", "get_current_datetime", "none"]
+        "create_reminder", "list_reminders", "complete_reminder", "snooze_reminder",
+        "get_current_datetime", "none"]
 
 
 def test_invalid_args_asks_for_clarification_without_running_tool(env):
@@ -212,3 +213,18 @@ def test_non_dict_or_malformed_action_is_handled(env):
     r = make(llm).handle("remind me")
     assert r.needs_clarification is True
     assert env["calls"] == []
+
+
+def test_snooze_action_is_routed(env, monkeypatch):
+    def fake_snooze(conn, args, now, tz):
+        env["calls"].append(("snooze_reminder", args))
+        return ToolResult(ok=True, message="Snoozed: call Ali — Wed 14 Oct, 3:15 PM")
+
+    monkeypatch.setitem(assistant_mod.TOOLS, "snooze_reminder", (SnoozeReminderArgs, fake_snooze))
+    llm = FakeLLM({"tool": "snooze_reminder", "args": {"reminder_id": 3, "when": "in 10 minutes"}, "reply": "ok"})
+    r = make(llm).handle("snooze 3 for 10 minutes")
+    assert r.tool == "snooze_reminder"
+    assert r.reply == "Snoozed: call Ali — Wed 14 Oct, 3:15 PM"
+    assert env["calls"] == [("snooze_reminder", SnoozeReminderArgs(reminder_id=3, when="in 10 minutes"))]
+    assert len(env["conns"]) == 1 and env["conns"][0].closed
+    assert "snooze_reminder" in llm.calls[0][0][0]["content"]  # listed in the system prompt

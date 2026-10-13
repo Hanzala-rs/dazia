@@ -28,6 +28,11 @@ class CompleteReminderArgs(BaseModel):
     reminder_id: int = Field(ge=1)
 
 
+class SnoozeReminderArgs(BaseModel):
+    reminder_id: int = Field(ge=1)
+    when: str = Field(min_length=1, max_length=100)  # raw time phrase, e.g. "in 10 minutes"
+
+
 def _format_local(value: datetime) -> str:
     """'Thu 15 Oct, 9:00 AM' (built by hand: Windows strftime has no %-I)."""
     hour12 = value.hour % 12 or 12
@@ -117,4 +122,33 @@ def complete_reminder(conn: sqlite3.Connection, args: CompleteReminderArgs, now:
         ok=True,
         message=f"Marked done: {reminder.title}",
         data={"reminder": {"id": reminder.id, "title": reminder.title, "status": db.STATUS_DONE}},
+    )
+
+
+def snooze_reminder(conn: sqlite3.Connection, args: SnoozeReminderArgs, now: datetime, tz: str) -> ToolResult:
+    """Move a pending reminder to a new time (resolved like create_reminder) so it fires again."""
+    reminder = db.get_reminder(conn, args.reminder_id)
+    if reminder is None:
+        return ToolResult(ok=False, message=f"I couldn't find reminder #{args.reminder_id}.")
+    if reminder.status == db.STATUS_DONE:
+        return ToolResult(ok=False, message=f"Reminder #{reminder.id} ({reminder.title}) is already done.")
+
+    resolution = resolve_time(args.when, now, tz)
+    if resolution.due is None:
+        return ToolResult(ok=False, needs_clarification=True, message=resolution.clarification or "When?")
+
+    due_local = resolution.due.astimezone(ZoneInfo(tz))
+    if not db.reschedule(conn, reminder.id, due_local.astimezone(timezone.utc)):
+        return ToolResult(ok=False, message=f"Reminder #{reminder.id} could not be snoozed.")
+    return ToolResult(
+        ok=True,
+        message=f"Snoozed: {reminder.title} — {_format_local(due_local)}",
+        data={
+            "reminder": {
+                "id": reminder.id,
+                "title": reminder.title,
+                "due_local": due_local.isoformat(),
+                "tz": tz,
+            }
+        },
     )
