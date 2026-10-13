@@ -14,6 +14,8 @@
   --clarify-border: #e0a800;
   --error-bg: #fde8e8;
   --error-text: #9b1c1c;
+  --rec: #dc2626;
+  --rec-text: #ffffff;
   --radius: 12px;
 }
 
@@ -33,6 +35,8 @@
     --clarify-border: #d9a514;
     --error-bg: #3d1a1a;
     --error-text: #ffb4b4;
+    --rec: #ef4444;
+    --rec-text: #0b0d10;
   }
 }
 
@@ -226,6 +230,47 @@ body {
   cursor: pointer;
 }
 .composer button:disabled, .composer textarea:disabled { opacity: 0.55; cursor: not-allowed; }
+
+/* Voice: mic (push-to-talk) and "Speak replies" toggle. */
+.composer .icon-btn {
+  min-width: 44px;
+  padding: 0 10px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  flex-shrink: 0;
+  border: 1px solid var(--border);
+  background: var(--panel);
+  color: var(--text);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+.icon-btn svg { fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+.icon-btn .mic-time:empty { display: none; }
+.composer .icon-btn[aria-pressed="true"] { background: var(--accent); color: var(--accent-text); border-color: var(--accent); }
+.composer .mic.recording {
+  background: var(--rec);
+  color: var(--rec-text);
+  border-color: var(--rec);
+  animation: rec-pulse 1.2s ease-in-out infinite;
+}
+@keyframes rec-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 var(--rec); }
+  50% { box-shadow: 0 0 0 5px transparent; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .composer .mic.recording { animation: none; }
+}
+.voice-status, .voice-hint { margin: 0; padding: 0 12px 8px; color: var(--muted); font-size: 0.9rem; }
+.voice-status:empty { display: none; }
+
+/* Narrow phones: keep room for the text box next to three buttons. */
+@media (max-width: 400px) {
+  .composer { gap: 6px; padding: 6px; }
+  .composer button { min-width: 60px; }
+  .composer .icon-btn { min-width: 44px; padding: 0 8px; }
+}
 
 .side {
   background: var(--panel);

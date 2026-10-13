@@ -16,6 +16,14 @@ class Settings(BaseSettings):
     # Phase 3 login. Empty = no login (only allowed while host is loopback). Generate with: python -m app.auth
     passphrase_hash: str = ""
     session_days: int = 30
+    # Phase 4 voice (local only). Each can be switched off independently.
+    stt_enabled: bool = True
+    stt_model: str = "base.en"  # faster-whisper model; downloaded once into models/whisper
+    tts_enabled: bool = True
+    tts_voice: str = "models/piper/en_US-lessac-medium.onnx"  # see README for the download command
+    max_audio_bytes: int = 5_000_000
+    max_audio_seconds: float = 30.0
+    max_tts_chars: int = 1000
 
 
 settings = Settings()
