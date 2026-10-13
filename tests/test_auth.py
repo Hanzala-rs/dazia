@@ -250,3 +250,23 @@ def test_cli_rejects_short_or_mismatch(monkeypatch, capsys, answers):
     with pytest.raises(SystemExit):
         auth.main()
     assert "DAZIA_PASSPHRASE_HASH=" not in capsys.readouterr().out
+
+
+# ---- Phase 5: remote access through a proxy (tailscale serve) ---------------------------
+
+
+def test_proxied_request_refused_without_passphrase(open_client):
+    res = open_client.get("/auth/status", headers={"X-Forwarded-For": "100.101.102.103"})
+    assert res.status_code == 403
+    assert "passphrase" in res.json()["detail"].lower()
+    assert open_client.get("/", headers={"Tailscale-User-Login": "me@example.com"}).status_code == 403
+
+
+def test_local_request_allowed_without_passphrase(open_client):
+    assert open_client.get("/auth/status").status_code == 200
+
+
+def test_proxied_request_allowed_with_passphrase(client):
+    headers = {"X-Forwarded-For": "100.101.102.103", "X-Forwarded-Proto": "https"}
+    assert client.get("/auth/status", headers=headers).status_code == 200
+    assert client.get("/health", headers=headers).status_code == 401  # still needs a session

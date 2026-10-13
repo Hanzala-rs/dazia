@@ -93,6 +93,15 @@ def auth_required() -> bool:
     return bool(settings.passphrase_hash)
 
 
+# Headers added by a forwarding proxy such as `tailscale serve`. Remote requests then arrive from
+# 127.0.0.1, so the startup host check can't see them; this catches them per request instead.
+_PROXY_HEADERS = ("x-forwarded-for", "x-forwarded-host", "x-forwarded-proto", "tailscale-user-login")
+
+
+def is_proxied(request: Request) -> bool:
+    return any(name in request.headers for name in _PROXY_HEADERS)
+
+
 # ---- sessions ----------------------------------------------------------------------
 
 def _token_hash(token: str) -> str:
