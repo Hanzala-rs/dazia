@@ -12,7 +12,7 @@ from pathlib import Path
 import uvicorn
 from fastapi import Depends, FastAPI, HTTPException, Query, Request, Response
 from fastapi.concurrency import run_in_threadpool
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, field_validator
 
@@ -58,6 +58,17 @@ app = FastAPI(
     openapi_url="/openapi.json" if _docs_open else None,
 )
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
+
+
+@app.middleware("http")
+async def block_remote_without_login(request: Request, call_next):
+    """Remote access (e.g. through `tailscale serve`) is refused until a login passphrase is set."""
+    if not auth.auth_required() and auth.is_proxied(request):
+        return JSONResponse(
+            status_code=403,
+            content={"detail": "Remote access needs a login. Set DAZIA_PASSPHRASE_HASH in .env (see README)."},
+        )
+    return await call_next(request)
 
 
 class ChatRequest(BaseModel):
@@ -271,4 +282,8 @@ def notification_read(notification_id: int) -> dict:
 
 
 if __name__ == "__main__":
-    uvicorn.run("app.main:app", host=settings.host, port=settings.port)
+    # proxy_headers: trust X-Forwarded-Proto/-For only from 127.0.0.1 (i.e. `tailscale serve` on this laptop),
+    # so cookies get the Secure flag over HTTPS and login rate limiting sees the real client.
+    uvicorn.run(
+        "app.main:app", host=settings.host, port=settings.port, proxy_headers=True, forwarded_allow_ips="127.0.0.1"
+    )

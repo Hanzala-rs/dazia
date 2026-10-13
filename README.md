@@ -34,6 +34,25 @@ Limitation: over plain `http` the browser treats the page as not secure, so inst
 and, later, the microphone won't work until Phase 5 adds HTTPS via Tailscale. Chat, reminders and
 notifications work. Only use this on a trusted home network.
 
+## Phone anywhere (HTTPS over Tailscale)
+Recommended way to use DAZIA from the phone, at home or on mobile data. Tailscale makes a private network
+between your own devices; `tailscale serve` gives the laptop a real HTTPS address that only your devices can
+open. DAZIA itself stays on `127.0.0.1`: no Wi-Fi binding, no firewall rule, no router port forwarding.
+
+1. Set a login passphrase (step 1–2 of "Phone on home Wi-Fi") but keep `DAZIA_HOST=127.0.0.1`.
+   DAZIA refuses remote requests until a passphrase is set.
+2. Install Tailscale on the laptop (https://tailscale.com/download) and the phone (Play Store) and sign in to
+   the **same** account on both.
+3. In the Tailscale admin console → DNS: make sure **MagicDNS** is on and enable **HTTPS Certificates**.
+4. On the laptop: `tailscale serve --bg 8000` (it prints `https://<laptop>.<tailnet>.ts.net`).
+   Check with `tailscale serve status`; undo with `tailscale serve reset`.
+5. Start DAZIA, open that `https://...ts.net` address on the phone and log in. Microphone and
+   "install as app" work here because the page is HTTPS.
+
+Never use `tailscale funnel` — that would publish DAZIA to the whole internet.
+If you used the Wi-Fi setup before, you can remove it: `scripts\allow-lan.ps1 -Remove` and set `DAZIA_HOST=127.0.0.1`.
+Remote use still needs the laptop on, awake and online. Tailscale's free personal plan is enough; check its current terms.
+
 ## Voice
 Speech runs entirely on the laptop; no audio or text leaves it.
 - Voice input: faster-whisper `base.en`. Downloaded automatically on first use into `models/whisper`.
