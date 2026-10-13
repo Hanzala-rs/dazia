@@ -234,3 +234,44 @@ def test_add_notification_rejects_unknown_kind(conn):
     with pytest.raises(ValueError):
         db.add_notification(conn, "x", "y", "spam")
     assert db.list_notifications(conn, unread_only=False) == []
+
+
+# ---- Phase 3: sessions ----------------------------------------------------------------
+
+def test_sessions_valid_until_expiry(conn):
+    now = datetime(2026, 10, 15, 4, 0, tzinfo=UTC)
+    db.add_session(conn, "abc", now + timedelta(days=30))
+    assert db.get_session_valid(conn, "abc", now)
+    assert not db.get_session_valid(conn, "abc", now + timedelta(days=30))  # expiry instant is invalid
+    assert not db.get_session_valid(conn, "unknown", now)
+
+
+def test_delete_session(conn):
+    now = datetime(2026, 10, 15, 4, 0, tzinfo=UTC)
+    db.add_session(conn, "abc", now + timedelta(days=1))
+    assert db.delete_session(conn, "abc") is True
+    assert db.delete_session(conn, "abc") is False
+    assert not db.get_session_valid(conn, "abc", now)
+
+
+def test_delete_expired_sessions_keeps_live_ones(conn):
+    now = datetime(2026, 10, 15, 4, 0, tzinfo=UTC)
+    db.add_session(conn, "old", now - timedelta(seconds=1))
+    db.add_session(conn, "live", now + timedelta(hours=1))
+    assert db.delete_expired_sessions(conn, now) == 1
+    assert [r["token_hash"] for r in conn.execute("SELECT token_hash FROM sessions")] == ["live"]
+
+
+def test_sessions_table_added_to_existing_db(tmp_path):
+    path = str(tmp_path / "old.db")
+    old = sqlite3.connect(path)
+    old.execute("CREATE TABLE reminders (id INTEGER PRIMARY KEY, title TEXT NOT NULL, due_utc TEXT NOT NULL, "
+                "tz TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'pending', created_at TEXT NOT NULL, notified_at TEXT)")
+    old.commit()
+    old.close()
+    upgraded = db.connect(path)
+    try:
+        columns = [row["name"] for row in upgraded.execute("PRAGMA table_info(sessions)")]
+        assert columns == ["token_hash", "created_at", "expires_at"]
+    finally:
+        upgraded.close()

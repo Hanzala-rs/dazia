@@ -46,6 +46,9 @@ def client(monkeypatch):
     monkeypatch.setattr(main, "OllamaClient", FakeLLM)
     monkeypatch.setattr(main, "Assistant", FakeAssistant)
     monkeypatch.setattr(main, "ReminderScheduler", FakeScheduler)
+    # Login off for these tests (whatever .env says); auth itself is covered in test_auth.py.
+    monkeypatch.setattr(main.settings, "passphrase_hash", "")
+    monkeypatch.setattr(main.settings, "host", "127.0.0.1")
     with TestClient(main.app) as c:
         yield c
 
@@ -213,3 +216,21 @@ def test_notification_mark_read(client, monkeypatch, fake_conn, found):
 
 def test_notification_mark_read_bad_id(client):
     assert client.post("/notifications/abc/read").status_code == 422
+
+
+def test_root_pwa_files_served_when_present(client, monkeypatch, tmp_path):
+    (tmp_path / "manifest.json").write_text('{"name": "DAZIA"}', encoding="utf-8")
+    (tmp_path / "sw.js").write_text("self.addEventListener('fetch', () => {});", encoding="utf-8")
+    monkeypatch.setattr(main, "STATIC_DIR", tmp_path)
+    res = client.get("/manifest.json")
+    assert res.status_code == 200
+    assert res.headers["content-type"].startswith("application/manifest+json")
+    res = client.get("/sw.js")
+    assert res.status_code == 200
+    assert "javascript" in res.headers["content-type"]
+
+
+def test_root_pwa_files_404_when_missing(client, monkeypatch, tmp_path):
+    monkeypatch.setattr(main, "STATIC_DIR", tmp_path)
+    assert client.get("/manifest.json").status_code == 404
+    assert client.get("/sw.js").status_code == 404

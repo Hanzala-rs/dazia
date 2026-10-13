@@ -31,6 +31,11 @@ CREATE TABLE IF NOT EXISTS notifications (
     created_at TEXT NOT NULL,
     read_at TEXT
 );
+CREATE TABLE IF NOT EXISTS sessions (
+    token_hash TEXT PRIMARY KEY,
+    created_at TEXT NOT NULL,
+    expires_at TEXT NOT NULL
+);
 """
 
 # UPDATE ... RETURNING needs SQLite 3.35+; older builds use a locked SELECT + UPDATE instead.
@@ -254,3 +259,35 @@ def mark_notification_read(conn: sqlite3.Connection, notification_id: int) -> bo
     )
     conn.commit()
     return cur.rowcount == 1
+
+
+# ---- Phase 3: login sessions -------------------------------------------------------
+# Only sha256(token) is stored, never the token itself, so a copied database can't be used to log in.
+
+def add_session(conn: sqlite3.Connection, token_hash: str, expires_utc: datetime) -> None:
+    conn.execute(
+        "INSERT INTO sessions (token_hash, created_at, expires_at) VALUES (?, ?, ?)",
+        (token_hash, _to_utc_text(datetime.now(timezone.utc)), _to_utc_text(expires_utc)),
+    )
+    conn.commit()
+
+
+def get_session_valid(conn: sqlite3.Connection, token_hash: str, now_utc: datetime) -> bool:
+    """True if the session exists and has not expired."""
+    row = conn.execute(
+        "SELECT 1 FROM sessions WHERE token_hash = ? AND expires_at > ?", (token_hash, _to_utc_text(now_utc))
+    ).fetchone()
+    return row is not None
+
+
+def delete_session(conn: sqlite3.Connection, token_hash: str) -> bool:
+    cur = conn.execute("DELETE FROM sessions WHERE token_hash = ?", (token_hash,))
+    conn.commit()
+    return cur.rowcount == 1
+
+
+def delete_expired_sessions(conn: sqlite3.Connection, now_utc: datetime) -> int:
+    """Remove sessions with expires_at <= now. Returns how many were removed."""
+    cur = conn.execute("DELETE FROM sessions WHERE expires_at <= ?", (_to_utc_text(now_utc),))
+    conn.commit()
+    return cur.rowcount

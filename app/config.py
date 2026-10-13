@@ -13,6 +13,9 @@ class Settings(BaseSettings):
     host: str = "127.0.0.1"
     port: int = 8000
     max_message_chars: int = 2000
+    # Phase 3 login. Empty = no login (only allowed while host is loopback). Generate with: python -m app.auth
+    passphrase_hash: str = ""
+    session_days: int = 30
 
 
 settings = Settings()

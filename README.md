@@ -21,6 +21,19 @@ copy .env.example .env   # optional; defaults work
 ```
 Open http://127.0.0.1:8000. The server binds to localhost only.
 
+## Phone on home Wi-Fi
+1. Create a passphrase hash: `.venv\Scripts\python -m app.auth` (asks twice, min 8 characters).
+2. Paste the printed `DAZIA_PASSPHRASE_HASH=...` line into `.env` and set `DAZIA_HOST=0.0.0.0`.
+   DAZIA refuses to start on a non-local address without a passphrase.
+3. In PowerShell **as Administrator**: `powershell -ExecutionPolicy Bypass -File scripts\allow-lan.ps1`.
+   It stops if your Wi-Fi is marked Public, allows port 8000 from your local subnet only, and prints the URL.
+   Undo with `-Remove`.
+4. Start DAZIA, open `http://<laptop-ip>:8000` on the phone and log in.
+
+Limitation: over plain `http` the browser treats the page as not secure, so install-as-app (service worker)
+and, later, the microphone won't work until Phase 5 adds HTTPS via Tailscale. Chat, reminders and
+notifications work. Only use this on a trusted home network.
+
 ## Test
 ```powershell
 .venv\Scripts\python -m pytest -q
