@@ -2,6 +2,7 @@
 
 Request flow:  browser -> POST /chat -> Assistant.handle() -> (LLM + tools) -> JSON reply.
 Run locally:   .venv/Scripts/python -m app.main   (binds 127.0.0.1 by default)
+Login (Phase 3): when DAZIA_PASSPHRASE_HASH is set, every data route needs a session cookie (see app/auth.py).
 """
 import asyncio
 import threading
@@ -9,13 +10,13 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 import uvicorn
-from fastapi import FastAPI, Query, Request
+from fastapi import Depends, FastAPI, HTTPException, Query, Request, Response
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, field_validator
 
-from app import db
+from app import auth, db
 from app.assistant import Assistant, AssistantReply
 from app.config import settings
 from app.llm import OllamaClient
@@ -30,6 +31,8 @@ _chat_lock = threading.Lock()
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # Runs under `python -m app.main` and plain uvicorn alike: never serve the LAN without a login.
+    auth.check_startup_safety(settings.host, settings.passphrase_hash)
     # Expensive resources are created once and shared by every request.
     app.state.llm = OllamaClient(settings.ollama_url, settings.ollama_model, settings.ollama_timeout_s)
     app.state.assistant = Assistant(app.state.llm, settings.db_path, settings.timezone)
@@ -40,7 +43,15 @@ async def lifespan(app: FastAPI):
     app.state.scheduler.shutdown()
 
 
-app = FastAPI(title="DAZIA", lifespan=lifespan)
+# The interactive API docs are only exposed when no login is configured (local-only use).
+_docs_open = not settings.passphrase_hash
+app = FastAPI(
+    title="DAZIA",
+    lifespan=lifespan,
+    docs_url="/docs" if _docs_open else None,
+    redoc_url="/redoc" if _docs_open else None,
+    openapi_url="/openapi.json" if _docs_open else None,
+)
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
 
@@ -71,7 +82,62 @@ def index() -> FileResponse:
     return FileResponse(STATIC_DIR / "index.html")
 
 
-@app.get("/health")
+def _root_static(name: str, media_type: str) -> FileResponse:
+    # Served at "/" (not /static) so the service worker's scope can be the whole app.
+    path = STATIC_DIR / name
+    if not path.is_file():
+        raise HTTPException(status_code=404, detail="Not Found")
+    return FileResponse(path, media_type=media_type)
+
+
+@app.get("/manifest.json")
+def manifest() -> FileResponse:
+    return _root_static("manifest.json", "application/manifest+json")
+
+
+@app.get("/sw.js")
+def service_worker() -> FileResponse:
+    return _root_static("sw.js", "application/javascript")
+
+
+# ---- login (public routes) -----------------------------------------------------------
+
+class LoginRequest(BaseModel):
+    passphrase: str
+
+
+@app.get("/auth/status")
+def auth_status(request: Request) -> dict:
+    return {"auth_required": auth.auth_required(), "authenticated": auth.is_authenticated(request)}
+
+
+@app.post("/login")
+def login(body: LoginRequest, request: Request, response: Response) -> dict:
+    if not auth.auth_required():
+        return {"ok": True}
+    ip = request.client.host if request.client else "unknown"
+    if auth.too_many_failures(ip):
+        raise HTTPException(status_code=429, detail="Too many wrong passphrases. Wait a few minutes and try again.")
+    if not auth.verify_passphrase(body.passphrase, settings.passphrase_hash):
+        auth.record_failure(ip)
+        raise HTTPException(status_code=401, detail="Wrong passphrase")
+    auth.reset_failures(ip)
+    auth.set_session_cookie(response, request, auth.create_session())
+    return {"ok": True}
+
+
+@app.post("/logout")
+def logout(request: Request, response: Response) -> dict:
+    auth.end_session(request.cookies.get(auth.COOKIE_NAME))
+    auth.clear_session_cookie(response, request)
+    return {"ok": True}
+
+
+# ---- data routes (login required when a passphrase is set) ------------------------------
+_protected = [Depends(auth.require_auth)]
+
+
+@app.get("/health", dependencies=_protected)
 def health(request: Request) -> dict:
     ok, detail = request.app.state.llm.health()
     return {"status": "ok", "model": settings.ollama_model, "llm_ok": bool(ok), "llm_detail": str(detail)}
@@ -82,13 +148,13 @@ def _handle_locked(assistant, message: str) -> AssistantReply:
         return assistant.handle(message)
 
 
-@app.post("/chat", response_model=AssistantReply)
+@app.post("/chat", response_model=AssistantReply, dependencies=_protected)
 async def chat(body: ChatRequest, request: Request) -> AssistantReply:
     # handle() is blocking (model inference), so run it off the event loop.
     return await run_in_threadpool(_handle_locked, request.app.state.assistant, body.message)
 
 
-@app.get("/reminders", response_model=list[ReminderOut])
+@app.get("/reminders", response_model=list[ReminderOut], dependencies=_protected)
 def reminders(status: str = Query(db.STATUS_PENDING, pattern=f"^({db.STATUS_PENDING}|{db.STATUS_DONE})$")):
     conn = db.connect(settings.db_path)
     try:
@@ -111,7 +177,7 @@ class NotificationOut(BaseModel):
     read_at: str | None  # ISO-8601 UTC, null while unread
 
 
-@app.get("/notifications", response_model=list[NotificationOut])
+@app.get("/notifications", response_model=list[NotificationOut], dependencies=_protected)
 def notifications(unread_only: bool = True, limit: int = Query(20, ge=1, le=100)):
     """Feed of delivered reminders, newest first."""
     conn = db.connect(settings.db_path)
@@ -129,7 +195,7 @@ def notifications(unread_only: bool = True, limit: int = Query(20, ge=1, le=100)
     ]
 
 
-@app.post("/notifications/{notification_id}/read")
+@app.post("/notifications/{notification_id}/read", dependencies=_protected)
 def notification_read(notification_id: int) -> dict:
     """Mark one notification read. Always 200: {"ok": false} means it was unknown or already read,
     so dismissing twice (e.g. from two browser tabs) is harmless."""

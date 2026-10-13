@@ -1,5 +1,6 @@
 // DAZIA chat UI. Plain JS, no framework.
 // Security: all user/model text is inserted with textContent, never innerHTML.
+// The passphrase is never stored; the server keeps the session in an HttpOnly cookie.
 
 const log = document.getElementById("log");
 const form = document.getElementById("form");
@@ -7,13 +8,88 @@ const input = document.getElementById("input");
 const sendBtn = document.getElementById("send");
 const thinking = document.getElementById("thinking");
 const banner = document.getElementById("banner");
+const offlineBanner = document.getElementById("offline");
 const modelLabel = document.getElementById("model");
 const remList = document.getElementById("reminders");
 const remEmpty = document.getElementById("rem-empty");
+const remCount = document.getElementById("rem-count");
+const side = document.getElementById("side");
 const notifList = document.getElementById("notifications");
 const alertsBtn = document.getElementById("enable-alerts");
+const appView = document.getElementById("app");
+const loginView = document.getElementById("login");
+const loginForm = document.getElementById("login-form");
+const passInput = document.getElementById("passphrase");
+const loginBtn = document.getElementById("login-btn");
+const loginError = document.getElementById("login-error");
+const logoutBtn = document.getElementById("logout");
 
-const UNREACHABLE = "Can't reach DAZIA on the laptop. Is the server running and are you on the same network?";
+const POLL_MS = 15000;     // notifications poll and offline retry interval
+const NOT_SENT = "Message not sent — DAZIA on the laptop can't be reached.";
+
+let authRequired = false;  // from /auth/status
+let started = false;       // chat view is active and polling
+let booted = false;        // /auth/status has answered at least once
+let pollTimer = null;
+let retryTimer = null;
+
+// ---- Central fetch helper ---------------------------------------------------------
+// Every API call goes through here so offline and 401 handling live in one place.
+// Throws an Error with .kind = "offline" | "unauthorized"; otherwise returns the Response.
+
+function apiError(kind) {
+  const err = new Error(kind);
+  err.kind = kind;
+  return err;
+}
+
+async function api(path, options) {
+  let res;
+  try {
+    res = await fetch(path, Object.assign({ credentials: "same-origin" }, options));
+  } catch (_) {
+    setOffline(true);
+    throw apiError("offline");
+  }
+  setOffline(false);
+  if (res.status === 401 && path !== "/login") {
+    sessionExpired();
+    throw apiError("unauthorized");
+  }
+  return res;
+}
+
+function postJson(path, data) {
+  return api(path, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(data || {}),
+  });
+}
+
+// ---- Offline banner + retry ---------------------------------------------------------
+
+function setOffline(offline) {
+  const wasOffline = !offlineBanner.hidden;
+  offlineBanner.hidden = !offline;
+  if (offline && !retryTimer) {
+    retryTimer = setInterval(retry, POLL_MS);
+  } else if (!offline && retryTimer) {
+    clearInterval(retryTimer);
+    retryTimer = null;
+  }
+  if (wasOffline && !offline && started) {
+    loadReminders();
+    loadNotifications();
+  }
+}
+
+function retry() {
+  if (!booted) boot();
+  else checkHealth();
+}
+
+// ---- Small UI helpers ----------------------------------------------------------------
 
 // Add one message bubble to the chat log. kind: "user" | "bot" | "clarify" | "error"
 function addMessage(kind, text, meta) {
@@ -31,6 +107,13 @@ function addMessage(kind, text, meta) {
   }
   log.appendChild(li);
   li.scrollIntoView({ block: "end", behavior: "smooth" });
+}
+
+// Show an error bubble, but not the same one twice in a row.
+function addErrorOnce(text) {
+  const last = log.lastElementChild;
+  if (last && last.classList.contains("error") && last.textContent === text) return;
+  addMessage("error", text);
 }
 
 function setBusy(busy) {
@@ -67,47 +150,106 @@ function formatDue(iso, tz) {
   }
 }
 
-async function checkHealth() {
+// ---- Login / logout ------------------------------------------------------------------
+
+function showLogin(message) {
+  stopApp();
+  appView.hidden = true;
+  loginView.hidden = false;
+  loginError.textContent = message || "";
+  loginBtn.disabled = false;
+  passInput.value = "";
+  passInput.focus();
+}
+
+// Any API call got 401: the session expired or the cookie is gone.
+function sessionExpired() {
+  if (!started) return; // already on the login screen (or logging out)
+  authRequired = true;
+  logoutBtn.hidden = false;
+  showLogin("Please log in again.");
+}
+
+loginForm.addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const passphrase = passInput.value;
+  if (!passphrase || loginBtn.disabled) return;
+  loginBtn.disabled = true;
+  loginError.textContent = "";
   try {
-    const res = await fetch("/health");
-    if (!res.ok) {
-      showBanner("DAZIA health check failed: " + (await errorText(res)));
+    const res = await postJson("/login", { passphrase: passphrase });
+    if (res.ok) {
+      passInput.value = "";
+      startApp();
       return;
     }
-    const h = await res.json();
-    modelLabel.textContent = h.model || "";
-    if (h.llm_ok) {
-      showBanner("");
-    } else {
-      showBanner("The local AI model (" + h.model + ") can't be loaded: " + h.llm_detail +
-        " — check that Ollama is running and the model is pulled.");
-    }
+    loginError.textContent = res.status === 401 ? "Wrong passphrase." : await errorText(res);
   } catch (_) {
-    showBanner(UNREACHABLE);
+    loginError.textContent = "Can't reach DAZIA right now.";
+  } finally {
+    loginBtn.disabled = false;
+  }
+});
+
+logoutBtn.addEventListener("click", async () => {
+  try {
+    await postJson("/logout");
+  } catch (_) {
+    return; // offline: the banner explains it; stay logged in
+  }
+  started = false; // ignore 401s from requests still in flight
+  log.replaceChildren();
+  notifList.replaceChildren();
+  remList.replaceChildren();
+  showLogin("");
+});
+
+// ---- Health, reminders, chat -------------------------------------------------------
+
+async function checkHealth() {
+  let res;
+  try {
+    res = await api("/health");
+  } catch (_) {
+    return; // offline banner or login screen already shown
+  }
+  if (!res.ok) {
+    showBanner("DAZIA health check failed: " + (await errorText(res)));
+    return;
+  }
+  const h = await res.json();
+  modelLabel.textContent = h.model || "";
+  if (h.llm_ok) {
+    showBanner("");
+  } else {
+    showBanner("The local AI model (" + h.model + ") can't be loaded: " + h.llm_detail +
+      " — check that Ollama is running and the model is pulled.");
   }
 }
 
 async function loadReminders() {
+  let items;
   try {
-    const res = await fetch("/reminders?status=pending");
+    const res = await api("/reminders?status=pending");
     if (!res.ok) return; // keep the old list; chat errors are shown elsewhere
-    const items = await res.json();
-    remList.replaceChildren();
-    for (const r of items) {
-      const li = document.createElement("li");
-      const title = document.createElement("span");
-      title.className = "rem-title";
-      title.textContent = r.title;
-      const due = document.createElement("span");
-      due.className = "rem-due";
-      due.textContent = formatDue(r.due_utc, r.tz);
-      li.append(title, due);
-      remList.appendChild(li);
-    }
-    remEmpty.hidden = items.length > 0;
+    items = await res.json();
   } catch (_) {
-    /* unreachable: the banner/chat already explains it */
+    return; // offline banner or login screen already shown
   }
+  remList.replaceChildren();
+  for (const r of items) {
+    const li = document.createElement("li");
+    const title = document.createElement("span");
+    title.className = "rem-title";
+    title.textContent = r.title;
+    const due = document.createElement("span");
+    due.className = "rem-due";
+    due.textContent = formatDue(r.due_utc, r.tz);
+    li.append(title, due);
+    remList.appendChild(li);
+  }
+  remEmpty.hidden = items.length > 0;
+  remCount.textContent = items.length ? "(" + items.length + ")" : "";
 }
 
 async function send(message) {
@@ -116,13 +258,10 @@ async function send(message) {
   try {
     let res;
     try {
-      res = await fetch("/chat", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ message: message }),
-      });
-    } catch (_) {
-      addMessage("error", UNREACHABLE);
+      res = await postJson("/chat", { message: message });
+    } catch (err) {
+      if (!input.value) input.value = message; // let the user resend it
+      if (err.kind === "offline") addErrorOnce(NOT_SENT);
       return;
     }
     if (!res.ok) {
@@ -162,7 +301,6 @@ input.addEventListener("keydown", (e) => {
 // The server writes a notification when a reminder fires. We poll for unread ones,
 // show them above the chat, and mark them read when dismissed.
 
-const POLL_MS = 15000;
 const seenIds = new Set();      // ids already shown at least once (no repeat browser alerts)
 const dismissedIds = new Set(); // dismissed here; hide even if a slow poll still returns them
 let firstLoad = true;
@@ -192,7 +330,7 @@ async function dismissNotification(id, li) {
   dismissedIds.add(id);
   li.remove();
   try {
-    await fetch("/notifications/" + encodeURIComponent(id) + "/read", { method: "POST" });
+    await api("/notifications/" + encodeURIComponent(id) + "/read", { method: "POST" });
   } catch (_) { /* offline: it shows again after reload, which is fine */ }
 }
 
@@ -219,11 +357,11 @@ function renderNotification(n) {
 async function loadNotifications() {
   let items;
   try {
-    const res = await fetch("/notifications?unread_only=true&limit=20");
+    const res = await api("/notifications?unread_only=true&limit=20");
     if (!res.ok) return;
     items = await res.json();
   } catch (_) {
-    return; // unreachable: the banner/chat already explains it
+    return; // offline banner or login screen already shown
   }
   let hasNew = false;
   notifList.replaceChildren();
@@ -240,8 +378,53 @@ async function loadNotifications() {
   if (hasNew) loadReminders(); // a fired reminder may have changed the pending list
 }
 
-updateAlertsButton();
-checkHealth();
-loadReminders();
-loadNotifications();
-setInterval(loadNotifications, POLL_MS);
+// ---- Startup ---------------------------------------------------------------------
+
+function startApp() {
+  loginView.hidden = true;
+  appView.hidden = false;
+  started = true;
+  updateAlertsButton();
+  checkHealth();
+  loadReminders();
+  loadNotifications();
+  if (!pollTimer) pollTimer = setInterval(loadNotifications, POLL_MS);
+}
+
+function stopApp() {
+  started = false;
+  if (pollTimer) {
+    clearInterval(pollTimer);
+    pollTimer = null;
+  }
+}
+
+async function boot() {
+  let status;
+  try {
+    const res = await api("/auth/status");
+    if (!res.ok) {
+      showBanner("DAZIA login check failed: " + (await errorText(res)));
+      return;
+    }
+    status = await res.json();
+  } catch (_) {
+    return; // offline: retry() calls boot() again every 15s
+  }
+  booted = true;
+  authRequired = Boolean(status.auth_required);
+  logoutBtn.hidden = !authRequired;
+  if (authRequired && !status.authenticated) showLogin("");
+  else startApp();
+}
+
+// Small screens: start with the reminders panel collapsed below the chat.
+if (window.matchMedia("(max-width: 799px)").matches) side.open = false;
+
+// Service worker only works in a secure context (HTTPS or localhost).
+// On plain-http LAN access this silently skips, which is expected.
+if ("serviceWorker" in navigator && window.isSecureContext) {
+  navigator.serviceWorker.register("/sw.js").catch(() => { /* app works without it */ });
+}
+
+boot();
