@@ -7,3 +7,5 @@ dateparser>=1.2
 pytest>=8.0
 tzdata>=2024.1
 tzlocal>=5.0
+faster-whisper>=1.0
+piper-tts>=1.3

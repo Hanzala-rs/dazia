@@ -34,6 +34,26 @@ Limitation: over plain `http` the browser treats the page as not secure, so inst
 and, later, the microphone won't work until Phase 5 adds HTTPS via Tailscale. Chat, reminders and
 notifications work. Only use this on a trusted home network.
 
+## Voice
+Speech runs entirely on the laptop; no audio or text leaves it.
+- Voice input: faster-whisper `base.en`. Downloaded automatically on first use into `models/whisper`.
+- Voice output: Piper `en_US-lessac-medium`. Download it once:
+  ```powershell
+  .venv\Scripts\python -m piper.download_voices en_US-lessac-medium --download-dir models/piper
+  ```
+Both models load on first use (a few seconds), not at startup.
+
+Settings (`.env`):
+| Setting | Default | Meaning |
+|---|---|---|
+| `DAZIA_STT_ENABLED` | `true` | Voice input on/off |
+| `DAZIA_TTS_ENABLED` | `true` | Voice output on/off |
+| `DAZIA_STT_MODEL` | `base.en` | faster-whisper model name |
+| `DAZIA_TTS_VOICE` | `models/piper/en_US-lessac-medium.onnx` | Piper voice file (`.onnx.json` must sit next to it) |
+
+Limitation: browsers only allow the microphone on a secure context. It works at
+http://127.0.0.1:8000 on the laptop, but on the phone over plain `http` it needs Phase 5 HTTPS (Tailscale).
+
 ## Test
 ```powershell
 .venv\Scripts\python -m pytest -q

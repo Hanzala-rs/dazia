@@ -23,6 +23,11 @@ const passInput = document.getElementById("passphrase");
 const loginBtn = document.getElementById("login-btn");
 const loginError = document.getElementById("login-error");
 const logoutBtn = document.getElementById("logout");
+const micBtn = document.getElementById("mic");
+const micTime = document.getElementById("mic-time");
+const speakBtn = document.getElementById("speak-toggle");
+const voiceStatus = document.getElementById("voice-status");
+const voiceHint = document.getElementById("voice-hint");
 
 const POLL_MS = 15000;     // notifications poll and offline retry interval
 const NOT_SENT = "Message not sent — DAZIA on the laptop can't be reached.";
@@ -64,6 +69,15 @@ function postJson(path, data) {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(data || {}),
+  });
+}
+
+// Send a Blob as the raw body with its own type (e.g. "audio/webm;codecs=opus").
+function postBlob(path, blob) {
+  return api(path, {
+    method: "POST",
+    headers: { "Content-Type": blob.type },
+    body: blob,
   });
 }
 
@@ -120,6 +134,7 @@ function setBusy(busy) {
   input.disabled = busy;
   sendBtn.disabled = busy;
   thinking.hidden = !busy;
+  updateMic();
   if (!busy) input.focus();
 }
 
@@ -274,6 +289,7 @@ async function send(message) {
     } else {
       addMessage("bot", data.reply, data.tool ? "tool: " + data.tool : "");
     }
+    speakReply(data.reply);
     loadReminders();
     loadNotifications();
   } finally {
@@ -286,6 +302,7 @@ form.addEventListener("submit", (e) => {
   const message = input.value.trim();
   if (!message || sendBtn.disabled) return;
   input.value = "";
+  if (micState !== "recording" && micState !== "transcribing") setVoiceStatus("");
   send(message);
 });
 
@@ -378,6 +395,256 @@ async function loadNotifications() {
   if (hasNew) loadReminders(); // a fired reminder may have changed the pending list
 }
 
+// ---- Voice input (push-to-talk) --------------------------------------------------
+// Tap the mic to start, tap again to stop. The recording is transcribed on the laptop
+// and the text goes INTO the input box so the user can fix it before sending.
+
+const REC_TYPES = ["audio/webm;codecs=opus", "audio/ogg;codecs=opus", "audio/mp4"];
+const REC_MAX_MS = 29500; // server limit is 30s; stop a little early so encoding overhead fits
+const SPEAK_KEY = "dazia.speakReplies";
+
+let micState = "idle";   // "idle" | "starting" | "recording" | "transcribing"
+let recorder = null;
+let recDiscard = false;  // true when a recording is cancelled (logout) instead of transcribed
+let recTimer = null;
+
+function setVoiceStatus(text) {
+  voiceStatus.textContent = text || "";
+}
+
+function updateMic() {
+  const recording = micState === "recording";
+  micBtn.classList.toggle("recording", recording);
+  micBtn.setAttribute("aria-label", recording ? "Stop recording" : "Start voice input");
+  micBtn.disabled = micState === "starting" || micState === "transcribing" ||
+    (micState === "idle" && sendBtn.disabled);
+  if (!recording) micTime.textContent = "";
+}
+
+function pickRecType() {
+  for (const t of REC_TYPES) {
+    if (MediaRecorder.isTypeSupported(t)) return t;
+  }
+  return ""; // let the browser choose
+}
+
+function micErrorText(err) {
+  const name = err && err.name;
+  if (name === "NotAllowedError" || name === "SecurityError") {
+    return "Microphone access was blocked. Allow the microphone for this site " +
+      "(tap the icon next to the address bar), then try again.";
+  }
+  if (name === "NotFoundError") return "No microphone was found on this device.";
+  if (name === "NotReadableError") return "The microphone is busy in another app.";
+  return "Couldn't start the microphone.";
+}
+
+async function startRecording() {
+  micState = "starting";
+  updateMic();
+  setVoiceStatus("");
+  let stream;
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+  } catch (err) {
+    micState = "idle";
+    updateMic();
+    setVoiceStatus(micErrorText(err));
+    return;
+  }
+  const stopTracks = () => stream.getTracks().forEach((t) => t.stop()); // mic indicator off
+  const type = pickRecType();
+  let rec;
+  try {
+    rec = new MediaRecorder(stream, type ? { mimeType: type } : undefined);
+  } catch (_) {
+    stopTracks();
+    micState = "idle";
+    updateMic();
+    setVoiceStatus("This browser can't record audio.");
+    return;
+  }
+  const chunks = [];
+  rec.addEventListener("dataavailable", (e) => {
+    if (e.data && e.data.size) chunks.push(e.data);
+  });
+  rec.addEventListener("stop", () => {
+    stopTracks();
+    clearInterval(recTimer);
+    recTimer = null;
+    recorder = null;
+    micState = "idle";
+    updateMic();
+    if (recDiscard || !started) {
+      setVoiceStatus("");
+      return;
+    }
+    const blobType = (chunks[0] && chunks[0].type) || rec.mimeType || type || "audio/webm";
+    transcribe(new Blob(chunks, { type: blobType }));
+  });
+
+  recorder = rec;
+  recDiscard = false;
+  rec.start();
+  micState = "recording";
+  updateMic();
+  setVoiceStatus("Recording… tap the mic again to stop.");
+  const startedAt = Date.now();
+  micTime.textContent = "0s";
+  recTimer = setInterval(() => {
+    const ms = Date.now() - startedAt;
+    micTime.textContent = Math.floor(ms / 1000) + "s";
+    if (ms >= REC_MAX_MS) stopRecording();
+  }, 250);
+}
+
+function stopRecording(discard) {
+  if (!recorder || recorder.state === "inactive") return;
+  recDiscard = Boolean(discard);
+  recorder.stop(); // the "stop" handler does the rest
+}
+
+async function transcribe(blob) {
+  if (!blob.size) {
+    setVoiceStatus("I didn't catch that — try again.");
+    return;
+  }
+  micState = "transcribing";
+  updateMic();
+  setVoiceStatus("Transcribing…");
+  try {
+    let res;
+    try {
+      res = await postBlob("/transcribe", blob);
+    } catch (err) {
+      setVoiceStatus(err.kind === "offline" ? "Can't reach DAZIA — the recording wasn't transcribed." : "");
+      return;
+    }
+    if (!res.ok) {
+      setVoiceStatus(await errorText(res));
+      return;
+    }
+    const data = await res.json();
+    const text = String(data.text || "").trim();
+    if (!text) {
+      setVoiceStatus("I didn't catch that — try again.");
+      return;
+    }
+    setVoiceStatus("Check the text, then send.");
+    const before = input.value.trim();
+    input.value = before ? before + " " + text : text;
+  } finally {
+    micState = "idle";
+    updateMic();
+    if (!input.disabled) {
+      input.focus();
+      input.setSelectionRange(input.value.length, input.value.length);
+    }
+  }
+}
+
+micBtn.addEventListener("click", () => {
+  if (micState === "idle") startRecording();
+  else if (micState === "recording") stopRecording();
+});
+
+// ---- Voice output ("Speak replies") -------------------------------------------------
+
+let speakOn = false;
+let speakToken = 0;      // bumps on every new reply, so a slow /speak can't talk over a newer one
+let currentAudio = null;
+
+function readSpeakPref() {
+  try {
+    return localStorage.getItem(SPEAK_KEY) === "1";
+  } catch (_) {
+    return false;
+  }
+}
+
+function setSpeakOn(on) {
+  speakOn = on;
+  speakBtn.setAttribute("aria-pressed", on ? "true" : "false");
+  try {
+    localStorage.setItem(SPEAK_KEY, on ? "1" : "0");
+  } catch (_) { /* private mode: just don't remember it */ }
+  if (!on) stopSpeaking();
+}
+
+function stopSpeaking() {
+  speakToken++;
+  if (currentAudio) {
+    currentAudio.pause();
+    URL.revokeObjectURL(currentAudio.src);
+    currentAudio = null;
+  }
+  if ("speechSynthesis" in window) window.speechSynthesis.cancel();
+}
+
+function browserSpeak(text, why) {
+  if (!("speechSynthesis" in window) || typeof SpeechSynthesisUtterance === "undefined") {
+    console.warn("DAZIA: can't speak reply:", why);
+    return;
+  }
+  window.speechSynthesis.speak(new SpeechSynthesisUtterance(text));
+}
+
+async function speakReply(text) {
+  if (!speakOn || speakBtn.hidden || !text) return;
+  stopSpeaking();
+  const token = speakToken;
+  let url = null;
+  try {
+    const res = await postJson("/speak", { text: text });
+    if (!res.ok) throw new Error("/speak returned " + res.status);
+    const blob = await res.blob();
+    if (token !== speakToken) return; // stopped or replaced meanwhile
+    url = URL.createObjectURL(blob);
+    const audio = new Audio(url);
+    currentAudio = audio;
+    const done = () => {
+      URL.revokeObjectURL(url);
+      if (currentAudio === audio) currentAudio = null;
+    };
+    audio.addEventListener("ended", done);
+    audio.addEventListener("error", done);
+    await audio.play();
+  } catch (err) {
+    if (err.kind === "unauthorized" || token !== speakToken) return;
+    if (url) URL.revokeObjectURL(url);
+    currentAudio = null;
+    browserSpeak(text, err);
+  }
+}
+
+speakBtn.addEventListener("click", () => setSpeakOn(!speakOn));
+
+// Show the voice controls the server and this browser support.
+async function loadVoiceStatus() {
+  let v;
+  try {
+    const res = await api("/voice/status");
+    if (!res.ok) return; // older server or voice routes missing: keep voice hidden
+    v = await res.json();
+  } catch (_) {
+    return;
+  }
+  const canRecord = Boolean(navigator.mediaDevices && navigator.mediaDevices.getUserMedia) &&
+    "MediaRecorder" in window && window.isSecureContext;
+  micBtn.hidden = !(v.stt_enabled && canRecord);
+  voiceHint.hidden = !(v.stt_enabled && !window.isSecureContext);
+  speakBtn.hidden = !v.tts_enabled;
+  speakOn = readSpeakPref();
+  speakBtn.setAttribute("aria-pressed", speakOn ? "true" : "false");
+  updateMic();
+}
+
+function stopVoice() {
+  stopRecording(true);
+  stopSpeaking();
+  setVoiceStatus("");
+}
+
 // ---- Startup ---------------------------------------------------------------------
 
 function startApp() {
@@ -388,11 +655,13 @@ function startApp() {
   checkHealth();
   loadReminders();
   loadNotifications();
+  loadVoiceStatus();
   if (!pollTimer) pollTimer = setInterval(loadNotifications, POLL_MS);
 }
 
 function stopApp() {
   started = false;
+  stopVoice();
   if (pollTimer) {
     clearInterval(pollTimer);
     pollTimer = null;

@@ -22,6 +22,8 @@ from app.config import settings
 from app.llm import OllamaClient
 from app.scheduler import ReminderScheduler
 from app.services.notify import Notifier
+from app.services.speech_to_text import AudioError, SpeechToText
+from app.services.text_to_speech import TextToSpeech, TTSUnavailable
 
 STATIC_DIR = Path(__file__).parent / "static"
 
@@ -36,6 +38,9 @@ async def lifespan(app: FastAPI):
     # Expensive resources are created once and shared by every request.
     app.state.llm = OllamaClient(settings.ollama_url, settings.ollama_model, settings.ollama_timeout_s)
     app.state.assistant = Assistant(app.state.llm, settings.db_path, settings.timezone)
+    # Voice models load lazily on first use, so startup stays fast and RAM is only used if voice is used.
+    app.state.stt = SpeechToText(settings.stt_model, max_seconds=settings.max_audio_seconds) if settings.stt_enabled else None
+    app.state.tts = TextToSpeech(settings.tts_voice, max_chars=settings.max_tts_chars) if settings.tts_enabled else None
     # Reminder delivery: SQLite is the source of truth; start() first delivers anything missed while stopped.
     app.state.scheduler = ReminderScheduler(settings.db_path, notify=Notifier(settings.db_path, settings.timezone))
     await asyncio.to_thread(app.state.scheduler.start)
@@ -152,6 +157,64 @@ def _handle_locked(assistant, message: str) -> AssistantReply:
 async def chat(body: ChatRequest, request: Request) -> AssistantReply:
     # handle() is blocking (model inference), so run it off the event loop.
     return await run_in_threadpool(_handle_locked, request.app.state.assistant, body.message)
+
+
+# ---- Voice (Phase 4) ------------------------------------------------------------
+# Speech-to-text shares the chat lock: on this CPU, STT and the LLM must not run at the same time.
+
+
+@app.get("/voice/status", dependencies=_protected)
+def voice_status(request: Request) -> dict:
+    return {"stt_enabled": request.app.state.stt is not None, "tts_enabled": request.app.state.tts is not None}
+
+
+def _transcribe_locked(stt: SpeechToText, audio: bytes) -> str:
+    with _chat_lock:
+        return stt.transcribe(audio)
+
+
+@app.post("/transcribe", dependencies=_protected)
+async def transcribe(request: Request) -> dict:
+    """Body = the raw recording (Content-Type audio/*). Returns {"text": ...} for the user to check before sending."""
+    stt = request.app.state.stt
+    if stt is None:
+        raise HTTPException(status_code=404, detail="Voice input is switched off")
+    if not request.headers.get("content-type", "").startswith("audio/"):
+        raise HTTPException(status_code=415, detail="Send the recording with an audio/* Content-Type")
+    audio = bytearray()
+    async for chunk in request.stream():  # read with a size cap instead of trusting Content-Length
+        audio.extend(chunk)
+        if len(audio) > settings.max_audio_bytes:
+            raise HTTPException(status_code=413, detail="Recording is too large")
+    try:
+        text = await run_in_threadpool(_transcribe_locked, stt, bytes(audio))
+    except AudioError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return {"text": text}
+
+
+class SpeakRequest(BaseModel):
+    text: str
+
+    @field_validator("text")
+    @classmethod
+    def check_text(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("text must not be empty")
+        return value[: settings.max_tts_chars]
+
+
+@app.post("/speak", dependencies=_protected)
+async def speak(body: SpeakRequest, request: Request) -> Response:
+    tts = request.app.state.tts
+    if tts is None:
+        raise HTTPException(status_code=404, detail="Voice output is switched off")
+    try:
+        wav = await run_in_threadpool(tts.synthesize, body.text)
+    except TTSUnavailable as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
+    return Response(content=wav, media_type="audio/wav", headers={"Cache-Control": "no-store"})
 
 
 @app.get("/reminders", response_model=list[ReminderOut], dependencies=_protected)
