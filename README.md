@@ -139,7 +139,21 @@ outside Advanced Protection to connect. Unit tests cover the client, tool, and s
 ```
 
 ## Data & backup
-Reminders live in `dazia.db` (SQLite, path set by `DAZIA_DB_PATH`). Back up by copying the file while the server is stopped; delete it to wipe all data.
+Reminders, notifications and login sessions live in `dazia.db` (SQLite, path set by `DAZIA_DB_PATH`).
+Chat history is kept only in memory and is gone when DAZIA restarts. Both commands below are safe while DAZIA
+is running.
+
+| To... | Run |
+|---|---|
+| Back up | `.venv\Scripts\python -m app.data backup` → `backups\dazia-YYYYMMDD-HHMMSS.db` |
+| Back up elsewhere (e.g. USB) | `.venv\Scripts\python -m app.data backup --dir E:\dazia-backups` |
+| Delete all reminders and notifications | `.venv\Scripts\python -m app.data wipe` (type `DELETE` to confirm) |
+
+Wipe keeps login sessions and compacts the file, so deleted text doesn't linger on disk. Backups are full copies of
+your data: keep them somewhere private, and delete old ones you don't need.
+
+To restore a backup: stop DAZIA (`Disable-ScheduledTask DAZIA; Stop-ScheduledTask DAZIA` if auto-start is on),
+copy the backup over `dazia.db`, then start DAZIA again.
 
 ## Troubleshooting
 - Banner "model can't load": start Ollama and run `ollama pull qwen3.5:4b`.

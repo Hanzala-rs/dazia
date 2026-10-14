@@ -300,3 +300,32 @@ def delete_expired_sessions(conn: sqlite3.Connection, now_utc: datetime) -> int:
     cur = conn.execute("DELETE FROM sessions WHERE expires_at <= ?", (_to_utc_text(now_utc),))
     conn.commit()
     return cur.rowcount
+
+
+# ---- Phase 10: backup and wipe ------------------------------------------------------
+
+def backup_to(conn: sqlite3.Connection, dest_path: str) -> None:
+    """Copy the whole database to `dest_path` with SQLite's online backup (safe while DAZIA is running)."""
+    dest = sqlite3.connect(dest_path)
+    try:
+        conn.backup(dest)
+    finally:
+        dest.close()
+
+
+def count_user_data(conn: sqlite3.Connection) -> dict[str, int]:
+    return {
+        "reminders": conn.execute("SELECT COUNT(*) FROM reminders").fetchone()[0],
+        "notifications": conn.execute("SELECT COUNT(*) FROM notifications").fetchone()[0],
+    }
+
+
+def wipe_user_data(conn: sqlite3.Connection) -> dict[str, int]:
+    """Delete all reminders and notifications (login sessions are kept), then VACUUM so the
+    deleted text is not left behind in free pages of the file. Returns how many rows were deleted."""
+    deleted = count_user_data(conn)
+    with conn:  # one transaction: both tables or neither
+        conn.execute("DELETE FROM notifications")
+        conn.execute("DELETE FROM reminders")
+    conn.execute("VACUUM")
+    return deleted
