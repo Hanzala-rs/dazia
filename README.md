@@ -169,6 +169,21 @@ Status: not yet verified against a real inbox. The owner's Google account is in 
 which blocks unverified apps from Gmail scopes (`Error 400: policy_enforced` at sign-in). Use a Gmail account
 outside Advanced Protection to connect. Unit tests cover the client, tool, and summary flow with mocked Gmail.
 
+## Microsoft Teams: not available
+Checked in October 2026 against Microsoft Graph v1.0 (Phase 13). Teams chat access is **not supported for
+personal Microsoft accounts**, which is the kind DAZIA's owner uses:
+
+| Need | Graph API | Delegated (personal Microsoft account) |
+|---|---|---|
+| List chats | [`GET /me/chats`](https://learn.microsoft.com/en-us/graph/api/chat-list) | Not supported |
+| Read chat messages | [`GET /chats/{id}/messages`](https://learn.microsoft.com/en-us/graph/api/chat-list-messages) | Not supported |
+| Send a chat message | [`POST /chats/{id}/messages`](https://learn.microsoft.com/en-us/graph/api/chatmessage-post) | Not supported |
+
+These APIs work only for work or school accounts in an organization's Microsoft 365 tenant. DAZIA therefore has
+no Teams feature, and it will not read Teams by scraping the app or website. Revisit this only if the owner
+gets a work/school account whose admin allows the `Chat.Read` permission, or if Microsoft adds
+personal-account support (check the permission tables on the pages above).
+
 ## Test
 ```powershell
 .venv\Scripts\python -m pytest -q
