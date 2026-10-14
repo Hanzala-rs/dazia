@@ -6,7 +6,7 @@ from zoneinfo import ZoneInfo
 import httpx
 import pytest
 
-from app.services import gmail
+from app.services import gmail, outlook
 from app.tools import mail
 
 TZ = "Asia/Karachi"
@@ -89,37 +89,63 @@ def test_token_roundtrip_is_encrypted(tmp_path):
     assert gmail.load_token(path) == {"refresh_token": "secret-value"}
 
 
+def _accounts(monkeypatch, outlook=False, gmail=False):
+    monkeypatch.setattr(mail.settings, "outlook_enabled", outlook)
+    monkeypatch.setattr(mail.settings, "gmail_enabled", gmail)
+
+
 def test_tool_disabled_calls_nothing(monkeypatch):
-    monkeypatch.setattr(mail.settings, "gmail_enabled", False)
-    monkeypatch.setattr(mail, "_get_client", lambda: pytest.fail("Gmail must not be called"))
+    _accounts(monkeypatch)
+    monkeypatch.setattr(mail, "_get_client", lambda account: pytest.fail("no mail service may be called"))
     r = mail.summarize_email(None, mail.SummarizeEmailArgs(), NOW, TZ)
-    assert not r.ok and "isn't enabled" in r.message
+    assert not r.ok and "No email account is enabled" in r.message
 
 
 class FakeGmail:
     def __init__(self, result):
         self.result, self.calls = result, []
 
-    def list_messages(self, query, limit):
-        self.calls.append((query, limit))
+    def list_messages(self, *args, **kwargs):
+        self.calls.append((args, kwargs))
         if isinstance(self.result, Exception):
             raise self.result
         return self.result
 
 
-def test_tool_lists_emails_in_local_time(monkeypatch):
-    email = gmail._to_email(MESSAGE)
-    fake = FakeGmail([email])
-    monkeypatch.setattr(mail.settings, "gmail_enabled", True)
-    monkeypatch.setattr(mail, "_get_client", lambda: fake)
+def test_tool_lists_gmail_in_local_time(monkeypatch):
+    fake = FakeGmail([gmail._to_email(MESSAGE)])
+    _accounts(monkeypatch, gmail=True)
+    monkeypatch.setattr(mail, "_get_client", lambda account: fake)
     r = mail.summarize_email(None, mail.SummarizeEmailArgs(filter="unread", limit=2), NOW, TZ)
-    assert fake.calls == [("in:inbox is:unread", 2)]
-    assert r.ok and r.message == "Latest 1 unread emails:\n- Ali <ali@x.com>: (no subject) (Wed 14 Oct, 9:00 AM)"
+    assert fake.calls == [(("in:inbox is:unread", 2), {})]
+    assert r.ok and r.message == "Latest 1 unread emails (Gmail):\n1. Ali <ali@x.com>: (no subject) (Wed 14 Oct, 9:00 AM)"
     assert r.data["emails"][0]["received_local"] == "2026-10-14T09:00:00+05:00"
+    assert r.data["account"] == "gmail"
 
 
-def test_tool_reports_gmail_errors(monkeypatch):
-    monkeypatch.setattr(mail.settings, "gmail_enabled", True)
-    monkeypatch.setattr(mail, "_get_client", lambda: FakeGmail(gmail.GmailNotConnected("Gmail isn't connected yet.")))
+def test_tool_prefers_outlook_and_respects_named_account(monkeypatch):
+    fake = FakeGmail([])
+    used = []
+    _accounts(monkeypatch, outlook=True, gmail=True)
+    monkeypatch.setattr(mail, "_get_client", lambda account: used.append(account) or fake)
+    r = mail.summarize_email(None, mail.SummarizeEmailArgs(filter="recent", limit=3), NOW, TZ)
+    assert used == ["outlook"] and fake.calls == [((), {"unread_only": False, "limit": 3})]
+    assert r.message == "You have no emails in your inbox (Outlook)."
+    mail.summarize_email(None, mail.SummarizeEmailArgs(account="gmail"), NOW, TZ)
+    assert used == ["outlook", "gmail"]
+
+
+def test_tool_named_account_must_be_enabled(monkeypatch):
+    _accounts(monkeypatch, outlook=True)
+    monkeypatch.setattr(mail, "_get_client", lambda account: pytest.fail("disabled account may not be called"))
+    r = mail.summarize_email(None, mail.SummarizeEmailArgs(account="gmail"), NOW, TZ)
+    assert not r.ok and r.message.startswith("Gmail isn't enabled")
+
+
+@pytest.mark.parametrize("error", [gmail.GmailNotConnected("Gmail isn't connected yet."),
+                                   outlook.OutlookNotConnected("Gmail isn't connected yet.")])
+def test_tool_reports_mail_errors(monkeypatch, error):
+    _accounts(monkeypatch, outlook=True, gmail=True)
+    monkeypatch.setattr(mail, "_get_client", lambda account: FakeGmail(error))
     r = mail.summarize_email(None, mail.SummarizeEmailArgs(), NOW, TZ)
     assert not r.ok and r.message == "Gmail isn't connected yet."

@@ -13,6 +13,7 @@ const modelLabel = document.getElementById("model");
 const remList = document.getElementById("reminders");
 const remEmpty = document.getElementById("rem-empty");
 const remCount = document.getElementById("rem-count");
+const remStatus = document.getElementById("rem-status");
 const side = document.getElementById("side");
 const notifList = document.getElementById("notifications");
 const alertsBtn = document.getElementById("enable-alerts");
@@ -251,20 +252,71 @@ async function loadReminders() {
   } catch (_) {
     return; // offline banner or login screen already shown
   }
+  const now = Date.now();
   remList.replaceChildren();
   for (const r of items) {
     const li = document.createElement("li");
+    const overdue = new Date(r.due_utc).getTime() < now;
+    if (overdue) li.className = "overdue";
     const title = document.createElement("span");
     title.className = "rem-title";
     title.textContent = r.title;
     const due = document.createElement("span");
     due.className = "rem-due";
-    due.textContent = formatDue(r.due_utc, r.tz);
-    li.append(title, due);
+    due.textContent = (overdue ? "Overdue · " : "") + formatDue(r.due_utc, r.tz);
+    li.append(title, due, reminderActions(r));
     remList.appendChild(li);
   }
   remEmpty.hidden = items.length > 0;
   remCount.textContent = items.length ? "(" + items.length + ")" : "";
+}
+
+// ---- Reminder buttons (Phase 9): act directly, without the language model -----------------
+
+const SNOOZE_CHOICES = [
+  { label: "+10 min", when: "in 10 minutes" },
+  { label: "+1 hour", when: "in 1 hour" },
+  { label: "Tomorrow 9 AM", when: "tomorrow at 9 AM" },
+];
+
+function reminderActions(r) {
+  const row = document.createElement("div");
+  row.className = "rem-actions";
+  row.append(actionButton("Done", "Mark “" + r.title + "” done",
+    () => postJson("/reminders/" + encodeURIComponent(r.id) + "/done")));
+  for (const choice of SNOOZE_CHOICES) {
+    row.append(actionButton(choice.label, "Snooze “" + r.title + "” " + choice.when,
+      () => postJson("/reminders/" + encodeURIComponent(r.id) + "/snooze", { when: choice.when })));
+  }
+  return row;
+}
+
+function actionButton(label, ariaLabel, request) {
+  const btn = document.createElement("button");
+  btn.type = "button";
+  btn.textContent = label;
+  btn.setAttribute("aria-label", ariaLabel);
+  btn.addEventListener("click", () => runReminderAction(btn.parentElement, request));
+  return btn;
+}
+
+async function runReminderAction(row, request) {
+  const buttons = row.querySelectorAll("button");
+  buttons.forEach((b) => { b.disabled = true; });
+  try {
+    const res = await request();
+    if (!res.ok) {
+      remStatus.textContent = await errorText(res);
+      return;
+    }
+    const result = await res.json();
+    remStatus.textContent = result.message;
+    await loadReminders();
+  } catch (err) {
+    if (err.kind === "offline") remStatus.textContent = "Not changed — DAZIA on the laptop can't be reached.";
+  } finally {
+    buttons.forEach((b) => { b.disabled = false; });
+  }
 }
 
 async function send(message) {

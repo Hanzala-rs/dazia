@@ -2,6 +2,8 @@
 
 Flow (easy to trace):
   handle(message)
+    0. If an email draft is waiting, only an exact "send" sends it and "cancel" discards it (no LLM).
+       Any other message discards the draft. The LLM can draft, but has no way to send.
     1. If a reminder is waiting for a clarified time, try to finish it without the LLM.
     2. Ask the LLM for ONE action as JSON: {"tool", "args", "reply"}.
     3. Look the tool up in the allowlisted TOOLS registry and validate args with Pydantic.
@@ -19,7 +21,7 @@ from pydantic import BaseModel, Field, ValidationError
 from app import db
 from app.llm import LLMClient, LLMError, LLMUnavailable
 from app.tools import ToolResult
-from app.tools import briefing, mail, reminders
+from app.tools import briefing, compose, mail, reminders
 
 log = logging.getLogger(__name__)
 
@@ -32,13 +34,18 @@ TOOLS: dict[str, tuple[type[BaseModel], Callable]] = {
     "summarize_email": (mail.SummarizeEmailArgs, mail.summarize_email),
     "daily_briefing": (briefing.DailyBriefingArgs, briefing.daily_briefing),
 }
+# Drafting tools: handled by the orchestrator because drafts and the last email list are conversation state.
+DRAFT_TOOLS: dict[str, type[BaseModel]] = {
+    "draft_email": compose.DraftEmailArgs,
+    "draft_reply": compose.DraftReplyArgs,
+}
 DATETIME_TOOL = "get_current_datetime"  # answered in Python, never by the model
 NO_TOOL = "none"
 
 ACTION_SCHEMA = {
     "type": "object",
     "properties": {
-        "tool": {"type": "string", "enum": [*TOOLS, DATETIME_TOOL, NO_TOOL]},
+        "tool": {"type": "string", "enum": [*TOOLS, *DRAFT_TOOLS, DATETIME_TOOL, NO_TOOL]},
         "args": {"type": "object"},
         "reply": {"type": "string"},
     },
@@ -55,7 +62,9 @@ Tools:
 - list_reminders: args {{"range": "today"|"tomorrow"|"upcoming"|"all"}}.
 - complete_reminder: args {{"reminder_id": int}} (the reminder's number).
 - snooze_reminder: args {{"reminder_id": int, "when": str}}. Move a reminder to a new time; put the time phrase in "when" EXACTLY as written (e.g. "in 10 minutes").
-- summarize_email: args {{"filter": "unread"|"recent", "limit": int 1-10}}. Read the user's Gmail inbox (read-only; cannot send).
+- summarize_email: args {{"filter": "unread"|"recent", "limit": int 1-10, "account": "outlook"|"gmail" (only if the user names one)}}. Read the user's email inbox (read-only; cannot send).
+- draft_email: args {{"to": the recipient's full email address exactly as the user wrote it ("" if none given), "subject": str, "body": str}}. Write a short email from the user's request. You cannot send; the user reviews it first.
+- draft_reply: args {{"email_number": int (its number in the last email list), "body": str}}. Draft a reply; the user reviews it first.
 - daily_briefing: args {{}}. For "brief me", "what's my day like", or an overview of today.
 - get_current_datetime: args {{}}. For questions about the current date or time.
 - none: args {{}}. Chat or questions; put your answer in "reply".
@@ -85,17 +94,47 @@ class Assistant:
         self.clock = clock or (lambda: datetime.now(self._zone))
         self.history: list[dict] = []  # [{"role": "user"|"assistant", "content": str}]
         self.pending: dict | None = None  # {"title", "when"} of a reminder awaiting a clearer time
+        self.draft: compose.Draft | None = None  # email waiting for "send" / "cancel"
+        self.last_emails: list[dict] = []  # Outlook emails from the last list, in numbered order
 
     # ---- public entry point -------------------------------------------------
     def handle(self, message: str) -> AssistantReply:
         message = message.strip()
-        result = self._try_resolve_pending(message)
+        had_draft = self.draft is not None
+        result = self._try_resolve_draft(message)
+        if result is None and had_draft:
+            log.info("Email draft discarded by a different message")
+        if result is None:
+            result = self._try_resolve_pending(message)
         if result is None:
             result = self._handle_with_llm(message)
+            if had_draft:
+                result.reply = "(Your email draft was discarded; nothing was sent.)\n\n" + result.reply
         self._remember(message, result.reply)
         return result
 
     # ---- steps --------------------------------------------------------------
+    def _try_resolve_draft(self, message: str) -> AssistantReply | None:
+        """Decide a waiting email draft from the user's own words, without the LLM.
+        Returns None (draft discarded) when the message is about something else."""
+        draft = self.draft
+        if draft is None:
+            return None
+        word = compose.normalize(message)
+        if word in compose.CONFIRM_WORDS:
+            self.draft = None
+            if draft.expired(self.clock()):
+                return AssistantReply(reply="That draft expired, so nothing was sent. Ask me to draft it again.")
+            result = mail.send_draft(draft)
+            return AssistantReply(reply=result.message, tool="send_email", data={"sent": result.ok})
+        if word in compose.CANCEL_WORDS:
+            self.draft = None
+            return AssistantReply(reply="Draft discarded. Nothing was sent.")
+        if word in {"yes", "ok", "okay", "sure", "yeah", "yep", "go ahead"}:
+            return AssistantReply(reply='To send it, type "send". To discard it, type "cancel".', needs_clarification=True)
+        self.draft = None
+        return None
+
     def _try_resolve_pending(self, message: str) -> AssistantReply | None:
         """Finish a reminder that needed a clearer time (e.g. "AM") without calling the LLM.
         Returns None when the message should be processed normally instead."""
@@ -138,10 +177,12 @@ class Assistant:
             return AssistantReply(reply=model_reply.strip() or "Sorry, I'm not sure how to help with that.")
         if tool == DATETIME_TOOL:
             return self._current_datetime()
+        if tool in DRAFT_TOOLS:
+            return self._draft(tool, args)
         if tool not in TOOLS:
             log.warning("Rejected unknown tool from LLM: %r", tool)
             return AssistantReply(
-                reply="Sorry, I can't do that. I can manage reminders, brief you on your day, and read your Gmail inbox."
+                reply="Sorry, I can't do that. I can manage reminders, brief you on your day, and read your email inbox."
             )
 
         args_model, _ = TOOLS[tool]
@@ -153,6 +194,7 @@ class Assistant:
 
         reply = self._run_tool(tool, validated)
         if tool == "summarize_email" and reply.data.get("emails"):
+            self._remember_emails(reply.data)
             reply = self._add_email_summary(reply)
         if tool == "create_reminder" and reply.needs_clarification:
             self.pending = {"title": validated.title, "when": validated.when}
@@ -173,6 +215,40 @@ class Assistant:
         return AssistantReply(
             reply=result.message, tool=name, needs_clarification=result.needs_clarification, data=result.data
         )
+
+    def _draft(self, tool: str, args: dict) -> AssistantReply:
+        """Build an email draft and show it in full. Nothing is sent here."""
+        if not mail.sending_enabled():
+            return AssistantReply(reply=mail.SEND_OFF_MESSAGE, tool=tool)
+        try:
+            validated = DRAFT_TOOLS[tool].model_validate(args)
+        except ValidationError as exc:
+            log.info("Invalid args for %s: %d error(s)", tool, exc.error_count())
+            return AssistantReply(reply=_clarify(tool), needs_clarification=True)
+        now = self.clock()
+        if tool == "draft_email":
+            draft = compose.new_draft(validated, now)
+        else:
+            draft = compose.reply_draft(validated, self.last_emails, now)
+        if isinstance(draft, str):  # a question: recipient or email number unclear
+            return AssistantReply(reply=draft, tool=tool, needs_clarification=True)
+        self.draft = draft
+        log.info("Email draft created (%s)", draft.kind)
+        return AssistantReply(
+            reply=compose.preview(draft),
+            tool=tool,
+            data={"draft": {"kind": draft.kind, "to": draft.to, "subject": draft.subject, "body": draft.body}},
+        )
+
+    def _remember_emails(self, data: dict) -> None:
+        """Keep the numbered Outlook list so "reply to 2" means the second email shown."""
+        if data.get("account") != "outlook":
+            self.last_emails = []
+            return
+        self.last_emails = [
+            {"id": e["id"], "from": e["from"], "reply_to": e["reply_to"], "subject": e["subject"]}
+            for e in data["emails"]
+        ]
 
     def _add_email_summary(self, reply: AssistantReply) -> AssistantReply:
         """Prepend a local-LLM summary to the email list. On any LLM problem, the plain list is still returned."""
@@ -214,6 +290,11 @@ def _clarify(tool: str) -> str:
         return "Which reminder should I mark as done? Please give its number."
     if tool == "summarize_email":
         return "Which emails should I check: unread or recent?"
+    if tool == "draft_email":
+        return ("Who should I send it to, and what should it say? Please give the full email address "
+                "(for example ali@example.com). I don't guess recipients.")
+    if tool == "draft_reply":
+        return "Which email should I reply to (its number in the list), and what should the reply say?"
     if tool == "snooze_reminder":
         return "Which reminder should I snooze, and until when? For example: 'snooze reminder 2 to 6 PM'."
     return "Which reminders would you like to see: today, tomorrow, upcoming, or all?"

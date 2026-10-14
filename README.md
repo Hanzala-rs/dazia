@@ -94,6 +94,11 @@ Settings (`.env`):
 Limitation: browsers only allow the microphone on a secure context. It works at
 http://127.0.0.1:8000 on the laptop, but on the phone over plain `http` it needs Phase 5 HTTPS (Tailscale).
 
+## Reminders panel
+The "Pending reminders" panel lists every pending reminder, with overdue ones in red. Each has buttons:
+**Done**, **+10 min**, **+1 hour**, and **Tomorrow 9 AM**. They act directly (no model call), so they work
+instantly on the phone, and use the same validation as the chat commands.
+
 ## Daily briefing
 Ask "brief me" or "what does my day look like?" to get today's date, overdue reminders, and the rest of
 today's reminders. It is built from the local database only (no model call for the content, no internet).
@@ -104,6 +109,42 @@ DAZIA_BRIEFING_TIME=08:00
 ```
 It appears in the notification feed and as a Windows toast, once per day. If the laptop is off or asleep at
 that time, it arrives on the first check after DAZIA is running again that day. Leave it empty to turn it off.
+
+## Outlook.com (read-only)
+Ask "summarize my unread email" or "show my recent Outlook emails". DAZIA uses Microsoft Graph with the
+delegated `Mail.Read` permission for a personal Microsoft account: it can't send, delete, or change mail.
+It reads sender, subject, time and Graph's short preview (not the full body); the local model summarizes them.
+See [PRIVACY.md](PRIVACY.md).
+
+Setup (once):
+1. Create a free Azure account (needed to register apps; Microsoft may ask for a card to verify identity).
+2. https://entra.microsoft.com > Entra ID > App registrations > New registration: name `DAZIA`,
+   **Personal accounts only**, redirect URI platform **Public client/native (mobile & desktop)** = `http://localhost`.
+3. API permissions > Add > Microsoft Graph > Delegated > **Mail.Read**.
+4. Put the **Application (client) ID** in `.env` as `DAZIA_OUTLOOK_CLIENT_ID=...` (no client secret is used).
+5. Sign in on the laptop and run one test read (prints a count only):
+   ```powershell
+   .venv\Scripts\python -m app.services.outlook
+   ```
+6. Set `DAZIA_OUTLOOK_ENABLED=true` in `.env` and restart DAZIA.
+
+If both Outlook and Gmail are enabled, Outlook is used unless you name Gmail ("check my Gmail").
+To disconnect, remove DAZIA at https://account.live.com/consent/Manage and delete `secrets/outlook_token.bin`.
+
+## Sending Outlook email (draft and confirm)
+Off by default. When on, you can say "email ali@example.com that I'll be late" or, after DAZIA lists your
+Outlook emails, "reply to 2 saying thanks". DAZIA shows the full draft (recipient, subject, text) and sends it
+**only** if your next message is exactly `send`. `cancel` discards it, and any other message discards it too.
+Drafts expire after 10 minutes. The language model can only draft; it has no way to send.
+
+- New emails go to one full address you typed. DAZIA never guesses a recipient from a name.
+- Replies go to the numbered email's sender, or its reply-to address (shown in the draft).
+
+Turn it on:
+1. In Entra, open the DAZIA app > API permissions > Add > Microsoft Graph > Delegated > **Mail.Send**.
+2. In `.env`: `DAZIA_OUTLOOK_SEND_ENABLED=true` (Outlook must be enabled too).
+3. Sign in again so you can approve sending: `.venv\Scripts\python -m app.services.outlook`
+4. Restart DAZIA.
 
 ## Gmail (read-only)
 Ask "summarize my unread email" or "show my recent emails". DAZIA uses only the `gmail.readonly` scope:
@@ -128,13 +169,42 @@ Status: not yet verified against a real inbox. The owner's Google account is in 
 which blocks unverified apps from Gmail scopes (`Error 400: policy_enforced` at sign-in). Use a Gmail account
 outside Advanced Protection to connect. Unit tests cover the client, tool, and summary flow with mocked Gmail.
 
+## Microsoft Teams: not available
+Checked in October 2026 against Microsoft Graph v1.0 (Phase 13). Teams chat access is **not supported for
+personal Microsoft accounts**, which is the kind DAZIA's owner uses:
+
+| Need | Graph API | Delegated (personal Microsoft account) |
+|---|---|---|
+| List chats | [`GET /me/chats`](https://learn.microsoft.com/en-us/graph/api/chat-list) | Not supported |
+| Read chat messages | [`GET /chats/{id}/messages`](https://learn.microsoft.com/en-us/graph/api/chat-list-messages) | Not supported |
+| Send a chat message | [`POST /chats/{id}/messages`](https://learn.microsoft.com/en-us/graph/api/chatmessage-post) | Not supported |
+
+These APIs work only for work or school accounts in an organization's Microsoft 365 tenant. DAZIA therefore has
+no Teams feature, and it will not read Teams by scraping the app or website. Revisit this only if the owner
+gets a work/school account whose admin allows the `Chat.Read` permission, or if Microsoft adds
+personal-account support (check the permission tables on the pages above).
+
 ## Test
 ```powershell
 .venv\Scripts\python -m pytest -q
 ```
 
 ## Data & backup
-Reminders live in `dazia.db` (SQLite, path set by `DAZIA_DB_PATH`). Back up by copying the file while the server is stopped; delete it to wipe all data.
+Reminders, notifications and login sessions live in `dazia.db` (SQLite, path set by `DAZIA_DB_PATH`).
+Chat history is kept only in memory and is gone when DAZIA restarts. Both commands below are safe while DAZIA
+is running.
+
+| To... | Run |
+|---|---|
+| Back up | `.venv\Scripts\python -m app.data backup` → `backups\dazia-YYYYMMDD-HHMMSS.db` |
+| Back up elsewhere (e.g. USB) | `.venv\Scripts\python -m app.data backup --dir E:\dazia-backups` |
+| Delete all reminders and notifications | `.venv\Scripts\python -m app.data wipe` (type `DELETE` to confirm) |
+
+Wipe keeps login sessions and compacts the file, so deleted text doesn't linger on disk. Backups are full copies of
+your data: keep them somewhere private, and delete old ones you don't need.
+
+To restore a backup: stop DAZIA (`Disable-ScheduledTask DAZIA; Stop-ScheduledTask DAZIA` if auto-start is on),
+copy the backup over `dazia.db`, then start DAZIA again.
 
 ## Troubleshooting
 - Banner "model can't load": start Ollama and run `ollama pull qwen3.5:4b`.

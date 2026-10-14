@@ -32,6 +32,13 @@ class Settings(BaseSettings):
     gmail_client_file: str = "secrets/gmail_client.json"  # OAuth client from Google Cloud Console
     gmail_token_file: str = "secrets/gmail_token.bin"  # DPAPI-encrypted; created by: python -m app.services.gmail
     gmail_timeout_s: float = 15.0
+    # Phase 11 Outlook.com (read-only, Microsoft Graph Mail.Read). Off by default.
+    outlook_enabled: bool = False
+    outlook_client_id: str = ""  # Application (client) ID of your app registration; not a secret
+    outlook_token_file: str = "secrets/outlook_token.bin"  # DPAPI-encrypted; created by: python -m app.services.outlook
+    outlook_timeout_s: float = 15.0
+    # Phase 12: let DAZIA send Outlook email after you type "send" to confirm a draft. Needs Mail.Send + re-sign-in.
+    outlook_send_enabled: bool = False
     # Phase 7 daily briefing: local time "HH:MM" (24-hour) to send it each day. Empty = no scheduled briefing.
     briefing_time: str = ""
 
