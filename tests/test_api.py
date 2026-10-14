@@ -265,3 +265,63 @@ def test_with_console_output_is_left_alone(monkeypatch):
     before = sys.stderr
     main_mod._log_to_file_without_console()
     assert sys.stderr is before
+
+
+@pytest.fixture
+def real_db(client, monkeypatch, tmp_path):
+    """A real SQLite file for the reminder button routes, with one reminder due in the future."""
+    path = str(tmp_path / "buttons.db")
+    monkeypatch.setattr(main.settings, "db_path", path)
+    monkeypatch.setattr(main.settings, "timezone", "Asia/Karachi")
+    conn = db.connect(path)
+    try:
+        db.insert_reminder(conn, "Call Ali", datetime(2030, 1, 1, 9, 0, tzinfo=timezone.utc), "Asia/Karachi")
+    finally:
+        conn.close()
+    return path
+
+
+def _reminder(path, reminder_id):
+    conn = db.connect(path)
+    try:
+        return db.get_reminder(conn, reminder_id)
+    finally:
+        conn.close()
+
+
+def test_done_button_marks_reminder_done(client, real_db):
+    res = client.post("/reminders/1/done")
+    assert res.status_code == 200
+    assert res.json()["ok"] is True and res.json()["message"] == "Marked done: Call Ali"
+    assert _reminder(real_db, 1).status == db.STATUS_DONE
+    again = client.post("/reminders/1/done").json()
+    assert again["ok"] is False and "already done" in again["message"]
+
+
+def test_done_unknown_or_invalid_id(client, real_db):
+    assert client.post("/reminders/99/done").json() == {
+        "ok": False, "message": "I couldn't find reminder #99.", "needs_clarification": False, "data": {}}
+    assert client.post("/reminders/0/done").status_code == 422
+
+
+def test_snooze_button_moves_reminder(client, real_db):
+    before = _reminder(real_db, 1).due_utc
+    res = client.post("/reminders/1/snooze", json={"when": "in 10 minutes"})
+    body = res.json()
+    assert res.status_code == 200 and body["ok"] is True and body["message"].startswith("Snoozed: Call Ali")
+    after = _reminder(real_db, 1).due_utc
+    assert after != before
+    assert abs((after - datetime.now(timezone.utc)).total_seconds() - 600) < 60
+
+
+def test_snooze_ambiguous_time_changes_nothing(client, real_db):
+    before = _reminder(real_db, 1).due_utc
+    body = client.post("/reminders/1/snooze", json={"when": "at 9"}).json()
+    assert body["ok"] is False and body["needs_clarification"] is True
+    assert _reminder(real_db, 1).due_utc == before
+
+
+def test_snooze_validates_body(client, real_db):
+    assert client.post("/reminders/1/snooze", json={"when": ""}).status_code == 422
+    assert client.post("/reminders/1/snooze", json={"when": "x" * 101}).status_code == 422
+    assert client.post("/reminders/1/snooze", json={}).status_code == 422

@@ -94,6 +94,11 @@ Settings (`.env`):
 Limitation: browsers only allow the microphone on a secure context. It works at
 http://127.0.0.1:8000 on the laptop, but on the phone over plain `http` it needs Phase 5 HTTPS (Tailscale).
 
+## Reminders panel
+The "Pending reminders" panel lists every pending reminder, with overdue ones in red. Each has buttons:
+**Done**, **+10 min**, **+1 hour**, and **Tomorrow 9 AM**. They act directly (no model call), so they work
+instantly on the phone, and use the same validation as the chat commands.
+
 ## Daily briefing
 Ask "brief me" or "what does my day look like?" to get today's date, overdue reminders, and the rest of
 today's reminders. It is built from the local database only (no model call for the content, no internet).

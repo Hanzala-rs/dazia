@@ -302,6 +302,23 @@ body {
 .reminders li:first-child { border-top: 0; }
 .rem-title { overflow-wrap: anywhere; }
 .rem-due { color: var(--muted); font-size: 0.85rem; }
+.reminders li.overdue .rem-due { color: var(--error-text); }
+.rem-status { margin: 0 0 6px; font-size: 0.85rem; color: var(--muted); white-space: pre-wrap; }
+.rem-status:empty { display: none; }
+.rem-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
+.rem-actions button {
+  font: inherit;
+  font-size: 0.85rem;
+  min-height: 44px;
+  padding: 2px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--panel);
+  color: var(--text);
+  cursor: pointer;
+}
+.rem-actions button:first-child { border-color: var(--accent); color: var(--accent); }
+.rem-actions button:disabled { opacity: 0.5; cursor: default; }
 
 /* Notification feed at the top of the chat. */
 .notify-bar {

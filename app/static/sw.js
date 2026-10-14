@@ -3,7 +3,7 @@
 // are never cached: anything not in SHELL is left alone and goes straight to the network.
 // Bump CACHE when the shell files change.
 
-const CACHE = "dazia-shell-v2";
+const CACHE = "dazia-shell-v3";
 const SHELL = ["/", "/static/app.js", "/static/style.css", "/static/icon.svg", "/manifest.json"];
 
 self.addEventListener("install", (event) => {

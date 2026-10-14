@@ -19,6 +19,8 @@ PROTECTED = [
     ("get", "/reminders", None),
     ("get", "/notifications", None),
     ("post", "/notifications/1/read", None),
+    ("post", "/reminders/1/done", None),
+    ("post", "/reminders/1/snooze", {"when": "in 10 minutes"}),
 ]
 
 
