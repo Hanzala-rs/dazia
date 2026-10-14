@@ -110,6 +110,27 @@ DAZIA_BRIEFING_TIME=08:00
 It appears in the notification feed and as a Windows toast, once per day. If the laptop is off or asleep at
 that time, it arrives on the first check after DAZIA is running again that day. Leave it empty to turn it off.
 
+## Outlook.com (read-only)
+Ask "summarize my unread email" or "show my recent Outlook emails". DAZIA uses Microsoft Graph with the
+delegated `Mail.Read` permission for a personal Microsoft account: it can't send, delete, or change mail.
+It reads sender, subject, time and Graph's short preview (not the full body); the local model summarizes them.
+See [PRIVACY.md](PRIVACY.md).
+
+Setup (once):
+1. Create a free Azure account (needed to register apps; Microsoft may ask for a card to verify identity).
+2. https://entra.microsoft.com > Entra ID > App registrations > New registration: name `DAZIA`,
+   **Personal accounts only**, redirect URI platform **Public client/native (mobile & desktop)** = `http://localhost`.
+3. API permissions > Add > Microsoft Graph > Delegated > **Mail.Read**.
+4. Put the **Application (client) ID** in `.env` as `DAZIA_OUTLOOK_CLIENT_ID=...` (no client secret is used).
+5. Sign in on the laptop and run one test read (prints a count only):
+   ```powershell
+   .venv\Scripts\python -m app.services.outlook
+   ```
+6. Set `DAZIA_OUTLOOK_ENABLED=true` in `.env` and restart DAZIA.
+
+If both Outlook and Gmail are enabled, Outlook is used unless you name Gmail ("check my Gmail").
+To disconnect, remove DAZIA at https://account.live.com/consent/Manage and delete `secrets/outlook_token.bin`.
+
 ## Gmail (read-only)
 Ask "summarize my unread email" or "show my recent emails". DAZIA uses only the `gmail.readonly` scope:
 it can't send, delete, or change mail. Previews (sender, subject, Gmail's ~200-char snippet) are fetched on request,

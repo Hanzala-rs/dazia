@@ -4,17 +4,16 @@ One-time sign-in on the laptop (opens the browser):  .venv/Scripts/python -m app
 The token file is encrypted with Windows DPAPI, so only this Windows user can read it.
 Email content is never logged or stored; callers only receive short previews.
 """
-import ctypes
 import html
 import json
 import logging
-import sys
-from ctypes import wintypes
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
 import httpx
+
+from app.services import dpapi
 
 log = logging.getLogger(__name__)
 
@@ -42,37 +41,22 @@ class Email:
     unread: bool
 
 
-# ---- token encryption (Windows DPAPI, current user) --------------------------
-class _Blob(ctypes.Structure):
-    _fields_ = [("cbData", wintypes.DWORD), ("pbData", ctypes.POINTER(ctypes.c_char))]
-
-
-def _dpapi(data: bytes, protect: bool) -> bytes:
-    if sys.platform != "win32":
-        raise GmailError("Gmail token encryption needs Windows (DPAPI).")
-    crypt32, kernel32 = ctypes.windll.crypt32, ctypes.windll.kernel32
-    buffer = ctypes.create_string_buffer(data, len(data))
-    blob_in = _Blob(len(data), ctypes.cast(buffer, ctypes.POINTER(ctypes.c_char)))
-    blob_out = _Blob()
-    func = crypt32.CryptProtectData if protect else crypt32.CryptUnprotectData
-    ui_forbidden = 0x1
-    if not func(ctypes.byref(blob_in), None, None, None, None, ui_forbidden, ctypes.byref(blob_out)):
-        raise GmailNotConnected("The saved Gmail sign-in could not be decrypted. Sign in again.")
-    try:
-        return ctypes.string_at(blob_out.pbData, blob_out.cbData)
-    finally:
-        kernel32.LocalFree(blob_out.pbData)
-
-
+# ---- token storage (encrypted with Windows DPAPI) ----------------------------------
 def save_token(path: Path, token_json: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_bytes(_dpapi(token_json.encode("utf-8"), protect=True))
+    try:
+        path.write_bytes(dpapi.protect(token_json.encode("utf-8")))
+    except dpapi.DPAPIError as exc:
+        raise GmailError(str(exc)) from exc
 
 
 def load_token(path: Path) -> dict:
     if not path.exists():
         raise GmailNotConnected("Gmail isn't connected yet. On the laptop run: python -m app.services.gmail")
-    return json.loads(_dpapi(path.read_bytes(), protect=False).decode("utf-8"))
+    try:
+        return json.loads(dpapi.unprotect(path.read_bytes()).decode("utf-8"))
+    except dpapi.DPAPIError as exc:
+        raise GmailNotConnected("The saved Gmail sign-in could not be decrypted. Sign in again.") from exc
 
 
 # ---- API client ---------------------------------------------------------------
@@ -137,15 +121,16 @@ def _to_email(msg: dict) -> Email:
     headers = {h.get("name", "").lower(): h.get("value", "") for h in msg.get("payload", {}).get("headers", [])}
     received = datetime.fromtimestamp(int(msg.get("internalDate", "0")) / 1000, tz=timezone.utc)
     return Email(
-        sender=_clean(headers.get("from", ""), MAX_FROM_CHARS) or "(unknown sender)",
-        subject=_clean(headers.get("subject", ""), MAX_SUBJECT_CHARS) or "(no subject)",
+        sender=clean_text(headers.get("from", ""), MAX_FROM_CHARS) or "(unknown sender)",
+        subject=clean_text(headers.get("subject", ""), MAX_SUBJECT_CHARS) or "(no subject)",
         received=received,
-        snippet=_clean(html.unescape(msg.get("snippet", "")), MAX_SNIPPET_CHARS),
+        snippet=clean_text(html.unescape(msg.get("snippet", "")), MAX_SNIPPET_CHARS),
         unread="UNREAD" in msg.get("labelIds", []),
     )
 
 
-def _clean(text: str, limit: int) -> str:
+def clean_text(text: str, limit: int) -> str:
+    """Collapse whitespace and cut to `limit` characters (shared with the Outlook service)."""
     text = " ".join(text.split())
     return text if len(text) <= limit else text[: limit - 1] + "…"
 
