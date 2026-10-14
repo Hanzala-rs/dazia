@@ -21,6 +21,27 @@ copy .env.example .env   # optional; defaults work
 ```
 Open http://127.0.0.1:8000. The server binds to localhost only.
 
+## Start automatically at login
+Reminders and the daily briefing only fire while DAZIA is running. To start it whenever you log in to Windows
+(no Administrator needed):
+```powershell
+powershell -ExecutionPolicy Bypass -File scriptsutostart.ps1
+```
+This creates the Task Scheduler task `DAZIA`. It runs without a console window 30 seconds after login (Ollama
+starts by itself), and checks every 5 minutes, restarting DAZIA within 5 minutes if it crashed. Output goes to
+`logs\dazia.log` (the previous log is kept as `dazia.log.1` once it passes 5 MB).
+
+| To... | Run |
+|---|---|
+| Start now | `Start-ScheduledTask DAZIA` |
+| Stop (stays stopped) | `Disable-ScheduledTask DAZIA; Stop-ScheduledTask DAZIA` |
+| Turn back on | `Enable-ScheduledTask DAZIA; Start-ScheduledTask DAZIA` |
+| Uninstall | `powershell -ExecutionPolicy Bypass -File scriptsutostart.ps1 -Remove` |
+
+A plain `Stop-ScheduledTask` is undone by the next 5-minute check. To run DAZIA by hand in a console
+(`python -m app.main`), stop the task first, or the two will compete for the port.
+It only runs while you are logged in; sleep or shutdown still pauses it (missed reminders are delivered on wake).
+
 ## Phone on home Wi-Fi
 1. Create a passphrase hash: `.venv\Scripts\python -m app.auth` (asks twice, min 8 characters).
 2. Paste the printed `DAZIA_PASSPHRASE_HASH=...` line into `.env` and set `DAZIA_HOST=0.0.0.0`.

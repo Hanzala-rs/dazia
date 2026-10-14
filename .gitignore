@@ -7,3 +7,4 @@ __pycache__/
 models/
 .pytest_cache/
 secrets/
+logs/

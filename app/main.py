@@ -5,6 +5,7 @@ Run locally:   .venv/Scripts/python -m app.main   (binds 127.0.0.1 by default)
 Login (Phase 3): when DAZIA_PASSPHRASE_HASH is set, every data route needs a session cookie (see app/auth.py).
 """
 import asyncio
+import sys
 import threading
 from contextlib import asynccontextmanager
 from datetime import time
@@ -27,6 +28,8 @@ from app.services.speech_to_text import AudioError, SpeechToText
 from app.services.text_to_speech import TextToSpeech, TTSUnavailable
 
 STATIC_DIR = Path(__file__).parent / "static"
+LOG_FILE = Path(__file__).parent.parent / "logs" / "dazia.log"  # used when started without a console (auto-start)
+LOG_MAX_BYTES = 5_000_000
 
 # One local model on CPU: only one chat request runs at a time.
 _chat_lock = threading.Lock()
@@ -287,7 +290,19 @@ def notification_read(notification_id: int) -> dict:
     return {"ok": bool(ok)}
 
 
+def _log_to_file_without_console() -> None:
+    """Under pythonw (Phase 8 auto-start) there is no console: sys.stderr is None and logging would fail.
+    Send output to logs/dazia.log instead, keeping one previous file (dazia.log.1) when it grows too big."""
+    if sys.stderr is not None:
+        return
+    LOG_FILE.parent.mkdir(exist_ok=True)
+    if LOG_FILE.exists() and LOG_FILE.stat().st_size > LOG_MAX_BYTES:
+        LOG_FILE.replace(LOG_FILE.with_name(LOG_FILE.name + ".1"))
+    sys.stdout = sys.stderr = open(LOG_FILE, "a", buffering=1, encoding="utf-8")
+
+
 if __name__ == "__main__":
+    _log_to_file_without_console()
     # proxy_headers: trust X-Forwarded-Proto/-For only from 127.0.0.1 (i.e. `tailscale serve` on this laptop),
     # so cookies get the Secure flag over HTTPS and login rate limiting sees the real client.
     uvicorn.run(
