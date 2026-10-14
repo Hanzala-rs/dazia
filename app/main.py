@@ -8,15 +8,17 @@ import asyncio
 import sys
 import threading
 from contextlib import asynccontextmanager
-from datetime import time
+from datetime import datetime, time
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 import uvicorn
 from fastapi import Depends, FastAPI, HTTPException, Query, Request, Response
+from fastapi import Path as PathParam
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, Field, field_validator
 
 from app import auth, db
 from app.assistant import Assistant, AssistantReply
@@ -26,6 +28,8 @@ from app.scheduler import BriefingJob, ReminderScheduler
 from app.services.notify import Notifier
 from app.services.speech_to_text import AudioError, SpeechToText
 from app.services.text_to_speech import TextToSpeech, TTSUnavailable
+from app.tools import ToolResult
+from app.tools import reminders as reminder_tools
 
 STATIC_DIR = Path(__file__).parent / "static"
 LOG_FILE = Path(__file__).parent.parent / "logs" / "dazia.log"  # used when started without a console (auto-start)
@@ -248,6 +252,36 @@ def reminders(status: str = Query(db.STATUS_PENDING, pattern=f"^({db.STATUS_PEND
         ReminderOut(id=r.id, title=r.title, due_utc=r.due_utc.isoformat(), tz=r.tz, status=r.status)
         for r in items
     ]
+
+
+# ---- Phase 9: reminder buttons (no LLM) ---------------------------------------------
+# The dashboard calls the same validated tools the assistant uses, so the rules live in one place.
+
+class SnoozeRequest(BaseModel):
+    when: str = Field(min_length=1, max_length=100)  # time phrase, e.g. "in 10 minutes", "tomorrow at 9 AM"
+
+
+def _run_reminder_tool(func, args: BaseModel) -> ToolResult:
+    now = datetime.now(ZoneInfo(settings.timezone))
+    conn = db.connect(settings.db_path)
+    try:
+        return func(conn, args, now, settings.timezone)
+    finally:
+        conn.close()
+
+
+@app.post("/reminders/{reminder_id}/done", response_model=ToolResult, dependencies=_protected)
+def reminder_done(reminder_id: int = PathParam(ge=1)) -> ToolResult:
+    """Always 200: {"ok": false, "message": ...} for an unknown or already-done reminder."""
+    args = reminder_tools.CompleteReminderArgs(reminder_id=reminder_id)
+    return _run_reminder_tool(reminder_tools.complete_reminder, args)
+
+
+@app.post("/reminders/{reminder_id}/snooze", response_model=ToolResult, dependencies=_protected)
+def reminder_snooze(body: SnoozeRequest, reminder_id: int = PathParam(ge=1)) -> ToolResult:
+    """Always 200; needs_clarification=true if the time phrase was ambiguous (nothing is changed then)."""
+    args = reminder_tools.SnoozeReminderArgs(reminder_id=reminder_id, when=body.when)
+    return _run_reminder_tool(reminder_tools.snooze_reminder, args)
 
 
 class NotificationOut(BaseModel):
