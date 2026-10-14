@@ -87,9 +87,19 @@ class Notifier:
             conn.close()
 
         if self.toast:
-            self._show_toast(reminder.id, title, body)
+            self._show_toast(f"reminder {reminder.id}", title, body)
 
-    def _show_toast(self, reminder_id: int, title: str, body: str) -> None:
+    def briefing(self, title: str, body: str) -> None:
+        """Record the daily briefing in the feed (raise if that fails), then show a toast (best effort)."""
+        conn = db.connect(self.db_path)
+        try:
+            db.add_notification(conn, title, body, db.KIND_BRIEFING)
+        finally:
+            conn.close()
+        if self.toast:
+            self._show_toast("briefing", title, body)
+
+    def _show_toast(self, label: str, title: str, body: str) -> None:
         # Untrusted text goes in env vars only; the script itself never changes.
         env = dict(os.environ)
         env[ENV_TITLE] = title
@@ -99,7 +109,7 @@ class Notifier:
             code = self.runner(args, env, TOAST_TIMEOUT_S)
         except Exception as exc:  # timeout, not Windows, PowerShell missing, ...
             # Log only the error type, never the reminder text.
-            log.warning("Toast for reminder %s failed: %s", reminder_id, type(exc).__name__)
+            log.warning("Toast for %s failed: %s", label, type(exc).__name__)
             return
         if code != 0:
-            log.warning("Toast for reminder %s failed: PowerShell exit code %s", reminder_id, code)
+            log.warning("Toast for %s failed: PowerShell exit code %s", label, code)

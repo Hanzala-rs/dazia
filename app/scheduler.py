@@ -3,14 +3,17 @@
 Design: SQLite is the source of truth. An APScheduler interval job calls check_now() every
 `interval_s` seconds; check_now() claims due reminders in the DB and hands each to `notify`.
 This survives restarts, sleep and crashes without keeping per-reminder jobs in sync.
+The same job also runs the optional daily briefing (BriefingJob), which is sent once per local day.
 """
 import logging
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, time, timedelta, timezone
 from typing import Callable
+from zoneinfo import ZoneInfo
 
 from apscheduler.schedulers.background import BackgroundScheduler
 
 from app import db
+from app.tools.briefing import DailyBriefingArgs, daily_briefing
 
 log = logging.getLogger(__name__)
 
@@ -18,6 +21,36 @@ log = logging.getLogger(__name__)
 NotifyFn = Callable[[db.Reminder, bool], None]
 
 JOB_ID = "reminder-check"
+BRIEFING_TITLE = "Daily briefing"
+
+
+class BriefingJob:
+    """Send the daily briefing once per local day, at or after `at`.
+    If the laptop was off or asleep at that time, it is sent on the next check that day."""
+
+    def __init__(self, db_path: str, tz: str, at: time, send: Callable[[str, str], None]):
+        self.db_path = db_path
+        self.tz = tz
+        self.at = at
+        self.send = send  # send(title, body), e.g. Notifier.briefing
+
+    def __call__(self, now: datetime) -> bool:
+        """Returns True if a briefing was sent."""
+        zone = ZoneInfo(self.tz)
+        local = now.astimezone(zone)
+        if local.time() < self.at:
+            return False
+        start_of_day = datetime.combine(local.date(), time(0), tzinfo=zone)
+        conn = db.connect(self.db_path)
+        try:
+            if db.has_notification_since(conn, db.KIND_BRIEFING, start_of_day):
+                return False  # already sent today (survives restarts: the feed row is the record)
+            body = daily_briefing(conn, DailyBriefingArgs(), now, self.tz).message
+        finally:
+            conn.close()
+        self.send(BRIEFING_TITLE, body)
+        log.info("Daily briefing sent")
+        return True
 
 
 class ReminderScheduler:
@@ -28,6 +61,7 @@ class ReminderScheduler:
         clock: Callable[[], datetime] | None = None,
         interval_s: int = 30,
         missed_after_s: int = 120,
+        briefing: Callable[[datetime], bool] | None = None,
     ):
         """A reminder delivered more than `missed_after_s` after its due time counts as missed."""
         self.db_path = db_path
@@ -35,6 +69,7 @@ class ReminderScheduler:
         self.clock = clock or (lambda: datetime.now(timezone.utc))
         self.interval_s = interval_s
         self.missed_after = timedelta(seconds=missed_after_s)
+        self.briefing = briefing
         self._scheduler: BackgroundScheduler | None = None
 
     def check_now(self) -> int:
@@ -67,6 +102,11 @@ class ReminderScheduler:
             self.check_now()
         except Exception:
             log.exception("Reminder check failed")
+        if self.briefing is not None:
+            try:
+                self.briefing(self.clock())
+            except Exception:
+                log.exception("Daily briefing failed; will retry next check")
 
     def start(self) -> None:
         """Run check_now() immediately (catches reminders missed while stopped), then every interval_s."""

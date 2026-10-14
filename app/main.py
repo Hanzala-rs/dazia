@@ -7,6 +7,7 @@ Login (Phase 3): when DAZIA_PASSPHRASE_HASH is set, every data route needs a ses
 import asyncio
 import threading
 from contextlib import asynccontextmanager
+from datetime import time
 from pathlib import Path
 
 import uvicorn
@@ -20,7 +21,7 @@ from app import auth, db
 from app.assistant import Assistant, AssistantReply
 from app.config import settings
 from app.llm import OllamaClient
-from app.scheduler import ReminderScheduler
+from app.scheduler import BriefingJob, ReminderScheduler
 from app.services.notify import Notifier
 from app.services.speech_to_text import AudioError, SpeechToText
 from app.services.text_to_speech import TextToSpeech, TTSUnavailable
@@ -42,7 +43,12 @@ async def lifespan(app: FastAPI):
     app.state.stt = SpeechToText(settings.stt_model, max_seconds=settings.max_audio_seconds) if settings.stt_enabled else None
     app.state.tts = TextToSpeech(settings.tts_voice, max_chars=settings.max_tts_chars) if settings.tts_enabled else None
     # Reminder delivery: SQLite is the source of truth; start() first delivers anything missed while stopped.
-    app.state.scheduler = ReminderScheduler(settings.db_path, notify=Notifier(settings.db_path, settings.timezone))
+    notifier = Notifier(settings.db_path, settings.timezone)
+    briefing = None
+    if settings.briefing_time:
+        at = time.fromisoformat(settings.briefing_time)
+        briefing = BriefingJob(settings.db_path, settings.timezone, at, send=notifier.briefing)
+    app.state.scheduler = ReminderScheduler(settings.db_path, notify=notifier, briefing=briefing)
     await asyncio.to_thread(app.state.scheduler.start)
     yield
     app.state.scheduler.shutdown()

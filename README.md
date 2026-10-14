@@ -73,6 +73,17 @@ Settings (`.env`):
 Limitation: browsers only allow the microphone on a secure context. It works at
 http://127.0.0.1:8000 on the laptop, but on the phone over plain `http` it needs Phase 5 HTTPS (Tailscale).
 
+## Daily briefing
+Ask "brief me" or "what does my day look like?" to get today's date, overdue reminders, and the rest of
+today's reminders. It is built from the local database only (no model call for the content, no internet).
+
+To get it automatically each day, set a local time in `.env`:
+```
+DAZIA_BRIEFING_TIME=08:00
+```
+It appears in the notification feed and as a Windows toast, once per day. If the laptop is off or asleep at
+that time, it arrives on the first check after DAZIA is running again that day. Leave it empty to turn it off.
+
 ## Gmail (read-only)
 Ask "summarize my unread email" or "show my recent emails". DAZIA uses only the `gmail.readonly` scope:
 it can't send, delete, or change mail. Previews (sender, subject, Gmail's ~200-char snippet) are fetched on request,
