@@ -55,7 +55,7 @@ Tools:
 - list_reminders: args {{"range": "today"|"tomorrow"|"upcoming"|"all"}}.
 - complete_reminder: args {{"reminder_id": int}} (the reminder's number).
 - snooze_reminder: args {{"reminder_id": int, "when": str}}. Move a reminder to a new time; put the time phrase in "when" EXACTLY as written (e.g. "in 10 minutes").
-- summarize_email: args {{"filter": "unread"|"recent", "limit": int 1-10}}. Read the user's Gmail inbox (read-only; cannot send).
+- summarize_email: args {{"filter": "unread"|"recent", "limit": int 1-10, "account": "outlook"|"gmail" (only if the user names one)}}. Read the user's email inbox (read-only; cannot send).
 - daily_briefing: args {{}}. For "brief me", "what's my day like", or an overview of today.
 - get_current_datetime: args {{}}. For questions about the current date or time.
 - none: args {{}}. Chat or questions; put your answer in "reply".
@@ -141,7 +141,7 @@ class Assistant:
         if tool not in TOOLS:
             log.warning("Rejected unknown tool from LLM: %r", tool)
             return AssistantReply(
-                reply="Sorry, I can't do that. I can manage reminders, brief you on your day, and read your Gmail inbox."
+                reply="Sorry, I can't do that. I can manage reminders, brief you on your day, and read your email inbox."
             )
 
         args_model, _ = TOOLS[tool]
