@@ -73,6 +73,29 @@ Settings (`.env`):
 Limitation: browsers only allow the microphone on a secure context. It works at
 http://127.0.0.1:8000 on the laptop, but on the phone over plain `http` it needs Phase 5 HTTPS (Tailscale).
 
+## Gmail (read-only)
+Ask "summarize my unread email" or "show my recent emails". DAZIA uses only the `gmail.readonly` scope:
+it can't send, delete, or change mail. Previews (sender, subject, Gmail's ~200-char snippet) are fetched on request,
+summarized by the local model, and not saved or logged. See [PRIVACY.md](PRIVACY.md).
+
+Setup (once):
+1. Google Cloud Console: enable the Gmail API, create an OAuth client of type **Desktop app**, add your Gmail
+   address as a test user, and save the client JSON as `secrets/gmail_client.json` (git-ignored).
+2. Sign in on the laptop (opens the browser):
+   ```powershell
+   .venv\Scripts\python -m app.services.gmail
+   ```
+   The token is saved to `secrets/gmail_token.bin`, encrypted with Windows DPAPI.
+3. Set `DAZIA_GMAIL_ENABLED=true` in `.env` and restart DAZIA.
+
+Limitation: while the OAuth app is in Google's "Testing" status, the sign-in expires after 7 days; DAZIA then
+says so and you run step 2 again. To disconnect, revoke DAZIA at https://myaccount.google.com/permissions and
+delete `secrets/gmail_token.bin`.
+
+Status: not yet verified against a real inbox. The owner's Google account is in the Advanced Protection Program,
+which blocks unverified apps from Gmail scopes (`Error 400: policy_enforced` at sign-in). Use a Gmail account
+outside Advanced Protection to connect. Unit tests cover the client, tool, and summary flow with mocked Gmail.
+
 ## Test
 ```powershell
 .venv\Scripts\python -m pytest -q

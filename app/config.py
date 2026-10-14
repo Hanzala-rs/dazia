@@ -24,6 +24,11 @@ class Settings(BaseSettings):
     max_audio_bytes: int = 5_000_000
     max_audio_seconds: float = 30.0
     max_tts_chars: int = 1000
+    # Phase 6 Gmail (read-only). Off by default: the default path calls no external API.
+    gmail_enabled: bool = False
+    gmail_client_file: str = "secrets/gmail_client.json"  # OAuth client from Google Cloud Console
+    gmail_token_file: str = "secrets/gmail_token.bin"  # DPAPI-encrypted; created by: python -m app.services.gmail
+    gmail_timeout_s: float = 15.0
 
 
 settings = Settings()
