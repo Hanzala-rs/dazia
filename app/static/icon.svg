@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <!-- Full-bleed background so the icon also works as a maskable icon; the "D" sits inside the safe zone. -->
+  <rect width="512" height="512" fill="#2563eb"/>
+  <path fill="#ffffff" fill-rule="evenodd"
+        d="M156 144h88a112 112 0 0 1 0 224h-88z M204 192h40a64 64 0 0 1 0 128h-40z"/>
+</svg>

@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>DAZIA</title>
+  <meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)">
+  <meta name="theme-color" content="#171b21" media="(prefers-color-scheme: dark)">
+  <link rel="manifest" href="/manifest.json">
+  <link rel="icon" href="/static/icon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="/static/icon.svg">
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <header class="top">
+    <h1>DAZIA</h1>
+    <span id="model" class="model"></span>
+    <button id="logout" class="logout" type="button" hidden>Log out</button>
+  </header>
+
+  <div id="offline" class="banner offline" role="status" hidden>Can't reach DAZIA on the laptop — is it on and awake?</div>
+  <div id="banner" class="banner" role="alert" hidden></div>
+
+  <section id="login" class="login" aria-label="Log in" hidden>
+    <form id="login-form" class="login-card">
+      <h2>Log in to DAZIA</h2>
+      <label for="passphrase">Passphrase</label>
+      <input id="passphrase" name="password" type="password" autocomplete="current-password" required>
+      <button id="login-btn" type="submit">Log in</button>
+      <p id="login-error" class="login-error" role="alert"></p>
+    </form>
+  </section>
+
+  <main id="app" class="layout" hidden>
+    <section class="chat" aria-label="Chat">
+      <div class="notify-bar">
+        <ul id="notifications" class="notifications" aria-live="polite" aria-label="Notifications"></ul>
+        <button id="enable-alerts" class="enable-alerts" type="button" hidden>Enable alerts</button>
+      </div>
+      <ol id="log" class="log" aria-live="polite"></ol>
+      <p id="thinking" class="thinking" hidden>Thinking…</p>
+      <p id="voice-status" class="voice-status" role="status" aria-live="polite"></p>
+      <p id="voice-hint" class="voice-hint" hidden>Voice needs HTTPS — available after secure remote access is set up.</p>
+      <form id="form" class="composer" autocomplete="off">
+        <textarea id="input" rows="1" placeholder="Ask DAZIA… e.g. remind me to call Ali at 5pm"
+                  aria-label="Message"></textarea>
+        <button id="mic" class="icon-btn mic" type="button" aria-label="Start voice input"
+                title="Voice input" hidden>
+          <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true" focusable="false">
+            <rect x="9" y="3" width="6" height="11" rx="3"/>
+            <path d="M5 11a7 7 0 0 0 14 0M12 18v3"/>
+          </svg>
+          <span id="mic-time" class="mic-time"></span>
+        </button>
+        <button id="speak-toggle" class="icon-btn" type="button" aria-label="Speak replies"
+                aria-pressed="false" title="Speak replies" hidden>
+          <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true" focusable="false">
+            <path d="M4 9v6h4l5 4V5L8 9H4z"/>
+            <path d="M16 9a4 4 0 0 1 0 6M18.5 6.5a7.5 7.5 0 0 1 0 11"/>
+          </svg>
+        </button>
+        <button id="send" type="submit">Send</button>
+      </form>
+    </section>
+
+    <details id="side" class="side" open>
+      <summary><h2>Pending reminders <span id="rem-count" class="rem-count"></span></h2></summary>
+      <p id="rem-empty" class="muted">No pending reminders.</p>
+      <ul id="reminders" class="reminders"></ul>
+    </details>
+  </main>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>
