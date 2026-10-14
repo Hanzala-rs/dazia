@@ -322,7 +322,7 @@ body {
   border-left: 4px solid var(--accent);
 }
 .notification.missed { background: var(--clarify-bg); border-left-color: var(--clarify-border); }
-.notification .n-text { flex: 1; overflow-wrap: anywhere; }
+.notification .n-text { flex: 1; overflow-wrap: anywhere; white-space: pre-wrap; }
 .notification .n-title { font-weight: 600; font-size: 0.85rem; }
 .notification button, .enable-alerts {
   font: inherit;

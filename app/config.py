@@ -1,4 +1,7 @@
 """DAZIA configuration. Values come from environment variables / .env (prefix DAZIA_). No secrets in code."""
+from datetime import time
+
+from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -29,6 +32,16 @@ class Settings(BaseSettings):
     gmail_client_file: str = "secrets/gmail_client.json"  # OAuth client from Google Cloud Console
     gmail_token_file: str = "secrets/gmail_token.bin"  # DPAPI-encrypted; created by: python -m app.services.gmail
     gmail_timeout_s: float = 15.0
+    # Phase 7 daily briefing: local time "HH:MM" (24-hour) to send it each day. Empty = no scheduled briefing.
+    briefing_time: str = ""
+
+    @field_validator("briefing_time")
+    @classmethod
+    def check_briefing_time(cls, value: str) -> str:
+        value = value.strip()
+        if value:
+            time.fromisoformat(value)  # raises ValueError -> clear startup error for a bad value
+        return value
 
 
 settings = Settings()

@@ -201,7 +201,8 @@ def reschedule(conn: sqlite3.Connection, reminder_id: int, due_utc: datetime) ->
 
 KIND_REMINDER = "reminder"  # delivered on time
 KIND_MISSED = "missed"  # delivered late (laptop was off/asleep or server stopped)
-_KINDS = (KIND_REMINDER, KIND_MISSED)
+KIND_BRIEFING = "briefing"  # Phase 7: the scheduled daily briefing
+_KINDS = (KIND_REMINDER, KIND_MISSED, KIND_BRIEFING)
 
 
 @dataclass
@@ -210,7 +211,7 @@ class Notification:
     reminder_id: int | None
     title: str
     body: str
-    kind: str  # KIND_REMINDER | KIND_MISSED
+    kind: str  # KIND_REMINDER | KIND_MISSED | KIND_BRIEFING
     created_at: datetime  # aware, UTC
     read_at: datetime | None
 
@@ -249,6 +250,14 @@ def list_notifications(conn: sqlite3.Connection, unread_only: bool = True, limit
         sql += " WHERE read_at IS NULL"
     sql += " ORDER BY created_at DESC, id DESC LIMIT ?"
     return [_row_to_notification(row) for row in conn.execute(sql, (limit,)).fetchall()]
+
+
+def has_notification_since(conn: sqlite3.Connection, kind: str, since_utc: datetime) -> bool:
+    """True if a notification of `kind` was created at or after `since_utc` (used to send a briefing once a day)."""
+    row = conn.execute(
+        "SELECT 1 FROM notifications WHERE kind = ? AND created_at >= ? LIMIT 1", (kind, _to_utc_text(since_utc))
+    ).fetchone()
+    return row is not None
 
 
 def mark_notification_read(conn: sqlite3.Connection, notification_id: int) -> bool:
