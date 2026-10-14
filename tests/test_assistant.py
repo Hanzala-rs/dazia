@@ -91,7 +91,7 @@ def test_system_prompt_has_date_weekday_tz_and_schema_enum(env):
     assert "2026-10-14 15:05" in system and "Wednesday" in system and TZ in system
     assert messages[-1] == {"role": "user", "content": "hello"}
     assert schema["properties"]["tool"]["enum"] == [
-        "create_reminder", "list_reminders", "complete_reminder", "snooze_reminder", "summarize_email",
+        "create_reminder", "list_reminders", "complete_reminder", "snooze_reminder", "summarize_email", "daily_briefing",
         "get_current_datetime", "none"]
 
 

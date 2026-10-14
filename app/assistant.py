@@ -19,7 +19,7 @@ from pydantic import BaseModel, Field, ValidationError
 from app import db
 from app.llm import LLMClient, LLMError, LLMUnavailable
 from app.tools import ToolResult
-from app.tools import mail, reminders
+from app.tools import briefing, mail, reminders
 
 log = logging.getLogger(__name__)
 
@@ -30,6 +30,7 @@ TOOLS: dict[str, tuple[type[BaseModel], Callable]] = {
     "complete_reminder": (reminders.CompleteReminderArgs, reminders.complete_reminder),
     "snooze_reminder": (reminders.SnoozeReminderArgs, reminders.snooze_reminder),
     "summarize_email": (mail.SummarizeEmailArgs, mail.summarize_email),
+    "daily_briefing": (briefing.DailyBriefingArgs, briefing.daily_briefing),
 }
 DATETIME_TOOL = "get_current_datetime"  # answered in Python, never by the model
 NO_TOOL = "none"
@@ -55,6 +56,7 @@ Tools:
 - complete_reminder: args {{"reminder_id": int}} (the reminder's number).
 - snooze_reminder: args {{"reminder_id": int, "when": str}}. Move a reminder to a new time; put the time phrase in "when" EXACTLY as written (e.g. "in 10 minutes").
 - summarize_email: args {{"filter": "unread"|"recent", "limit": int 1-10}}. Read the user's Gmail inbox (read-only; cannot send).
+- daily_briefing: args {{}}. For "brief me", "what's my day like", or an overview of today.
 - get_current_datetime: args {{}}. For questions about the current date or time.
 - none: args {{}}. Chat or questions; put your answer in "reply".
 For tools other than none, keep "reply" short; the system reports the real result."""
@@ -139,7 +141,7 @@ class Assistant:
         if tool not in TOOLS:
             log.warning("Rejected unknown tool from LLM: %r", tool)
             return AssistantReply(
-                reply="Sorry, I can't do that. I can manage reminders and read your Gmail inbox."
+                reply="Sorry, I can't do that. I can manage reminders, brief you on your day, and read your Gmail inbox."
             )
 
         args_model, _ = TOOLS[tool]
