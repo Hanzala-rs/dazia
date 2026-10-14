@@ -39,6 +39,8 @@ class Email:
     received: datetime  # aware, UTC
     snippet: str  # Gmail's short plain-text preview, not the full body
     unread: bool
+    id: str = ""  # provider message id (Outlook: used to reply)
+    reply_to: str = ""  # Outlook: address a reply goes to when it differs from the sender
 
 
 # ---- token storage (encrypted with Windows DPAPI) ----------------------------------

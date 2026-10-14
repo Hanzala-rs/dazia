@@ -131,6 +131,21 @@ Setup (once):
 If both Outlook and Gmail are enabled, Outlook is used unless you name Gmail ("check my Gmail").
 To disconnect, remove DAZIA at https://account.live.com/consent/Manage and delete `secrets/outlook_token.bin`.
 
+## Sending Outlook email (draft and confirm)
+Off by default. When on, you can say "email ali@example.com that I'll be late" or, after DAZIA lists your
+Outlook emails, "reply to 2 saying thanks". DAZIA shows the full draft (recipient, subject, text) and sends it
+**only** if your next message is exactly `send`. `cancel` discards it, and any other message discards it too.
+Drafts expire after 10 minutes. The language model can only draft; it has no way to send.
+
+- New emails go to one full address you typed. DAZIA never guesses a recipient from a name.
+- Replies go to the numbered email's sender, or its reply-to address (shown in the draft).
+
+Turn it on:
+1. In Entra, open the DAZIA app > API permissions > Add > Microsoft Graph > Delegated > **Mail.Send**.
+2. In `.env`: `DAZIA_OUTLOOK_SEND_ENABLED=true` (Outlook must be enabled too).
+3. Sign in again so you can approve sending: `.venv\Scripts\python -m app.services.outlook`
+4. Restart DAZIA.
+
 ## Gmail (read-only)
 Ask "summarize my unread email" or "show my recent emails". DAZIA uses only the `gmail.readonly` scope:
 it can't send, delete, or change mail. Previews (sender, subject, Gmail's ~200-char snippet) are fetched on request,
