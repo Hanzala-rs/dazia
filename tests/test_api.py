@@ -234,3 +234,34 @@ def test_root_pwa_files_404_when_missing(client, monkeypatch, tmp_path):
     monkeypatch.setattr(main, "STATIC_DIR", tmp_path)
     assert client.get("/manifest.json").status_code == 404
     assert client.get("/sw.js").status_code == 404
+
+
+def test_without_console_output_goes_to_rotated_log_file(tmp_path, monkeypatch):
+    import sys
+
+    from app import main as main_mod
+
+    log_file = tmp_path / "logs" / "dazia.log"
+    log_file.parent.mkdir()
+    log_file.write_text("x" * 20)
+    monkeypatch.setattr(main_mod, "LOG_FILE", log_file)
+    monkeypatch.setattr(main_mod, "LOG_MAX_BYTES", 10)
+    monkeypatch.setattr(sys, "stdout", None)
+    monkeypatch.setattr(sys, "stderr", None)  # what pythonw gives us
+    main_mod._log_to_file_without_console()
+    try:
+        print("hello", file=sys.stderr)
+    finally:
+        sys.stderr.close()
+    assert log_file.read_text(encoding="utf-8") == "hello\n"
+    assert (tmp_path / "logs" / "dazia.log.1").read_text() == "x" * 20
+
+
+def test_with_console_output_is_left_alone(monkeypatch):
+    import sys
+
+    from app import main as main_mod
+
+    before = sys.stderr
+    main_mod._log_to_file_without_console()
+    assert sys.stderr is before
