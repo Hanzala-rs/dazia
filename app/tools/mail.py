@@ -14,6 +14,7 @@ from pydantic import BaseModel, Field
 from app.config import settings
 from app.services.gmail import Email, GmailClient, GmailError
 from app.services.outlook import OutlookClient, OutlookError
+from app.tools.compose import Draft
 from app.tools import ToolResult
 
 log = logging.getLogger(__name__)
@@ -88,9 +89,38 @@ def summarize_email(conn: sqlite3.Connection, args: SummarizeEmailArgs, now: dat
             "received_local": e.received.astimezone(zone).isoformat(),
             "snippet": e.snippet,
             "unread": e.unread,
+            "id": e.id,
+            "reply_to": e.reply_to,
         }
         for e in emails
     ]
-    lines = [f"- {e.sender}: {e.subject} ({_format_local(e.received.astimezone(zone))})" for e in emails]
+    lines = [f"{i}. {e.sender}: {e.subject} ({_format_local(e.received.astimezone(zone))})"
+             for i, e in enumerate(emails, start=1)]
     heading = f"Latest {len(emails)} {label} ({name}):"
     return ToolResult(ok=True, message="\n".join([heading, *lines]), data={"emails": items, "account": account})
+
+
+# ---- Phase 12: sending a confirmed draft (Outlook only) -----------------------------------
+SEND_OFF_MESSAGE = ("Sending email is switched off. To allow it: add the Mail.Send permission in Entra, set "
+                    "DAZIA_OUTLOOK_ENABLED=true and DAZIA_OUTLOOK_SEND_ENABLED=true, sign in again, and restart.")
+
+
+def sending_enabled() -> bool:
+    return settings.outlook_enabled and settings.outlook_send_enabled
+
+
+def send_draft(draft: Draft) -> ToolResult:
+    """Send a draft the user has just confirmed. Never called on the LLM's request."""
+    if not sending_enabled():
+        return ToolResult(ok=False, message=SEND_OFF_MESSAGE)
+    client = _get_client("outlook")
+    try:
+        if draft.kind == "reply":
+            client.reply(draft.message_id, draft.body)
+        else:
+            client.send_mail(draft.to, draft.subject, draft.body)
+    except OutlookError as exc:
+        log.warning("Sending failed: %s", exc.__class__.__name__)
+        return ToolResult(ok=False, message=str(exc))
+    log.info("Email sent (%s)", draft.kind)  # never the recipient or text
+    return ToolResult(ok=True, message=f"Sent to {draft.to}.")

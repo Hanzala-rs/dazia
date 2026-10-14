@@ -118,7 +118,7 @@ def test_tool_lists_gmail_in_local_time(monkeypatch):
     monkeypatch.setattr(mail, "_get_client", lambda account: fake)
     r = mail.summarize_email(None, mail.SummarizeEmailArgs(filter="unread", limit=2), NOW, TZ)
     assert fake.calls == [(("in:inbox is:unread", 2), {})]
-    assert r.ok and r.message == "Latest 1 unread emails (Gmail):\n- Ali <ali@x.com>: (no subject) (Wed 14 Oct, 9:00 AM)"
+    assert r.ok and r.message == "Latest 1 unread emails (Gmail):\n1. Ali <ali@x.com>: (no subject) (Wed 14 Oct, 9:00 AM)"
     assert r.data["emails"][0]["received_local"] == "2026-10-14T09:00:00+05:00"
     assert r.data["account"] == "gmail"
 
